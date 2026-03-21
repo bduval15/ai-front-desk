@@ -1,26 +1,21 @@
-const { MongoClient } = require('mongodb');
+const mongoose = require('mongoose');
 
 if (!process.env.MONGODB_URI) throw new Error('MONGODB_URI is not defined');
 
-const client = new MongoClient(process.env.MONGODB_URI, {
-  maxPoolSize: 10,
-});
-
-let db;
-
 async function connectDB() {
-  if (db) return db;
-  
-  await client.connect();
-  db = client.db();
-  console.log('Connected to MongoDB');
-  return db;
+  try {
+    await mongoose.connect(process.env.MONGODB_URI);
+    console.log('Connected to MongoDB');
+  } catch (err) {
+    console.error('Connection failed:', err);
+    process.exit(1);
+  }
 }
 
 process.on('SIGINT', async () => {
-  await client.close();
+  await mongoose.connection.close();
   console.log('MongoDB connection closed');
   process.exit(0);
 });
 
-module.exports = { connectDB, client };
+module.exports = { connectDB };

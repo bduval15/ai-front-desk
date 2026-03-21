@@ -1,14 +1,15 @@
-import mongoose from 'mongoose';
+const mongoose = require('mongoose');
+const { v4: uuidv4 } = require('uuid');
 
-const UserSchema = new mongoose.Schema({
-  email: { type: String, required: true, unique: true },
-  password: { type: String, required: true },
-  role: { type: String, default: "user" },
+const userSchema = new mongoose.Schema({
+  _id: { type: String, default: uuidv4 },
+  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+  passwordHash: { type: String, required: true },
+  role: { type: String, default: 'user' },
   apiCalls: { type: Number, default: 0 },
-  resetPasswordToken: String,
-  resetPasswordExpires: Date,
+  resetPasswordToken: { type: String, default: null },
+  resetPasswordExpires: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now }
 });
 
-const User = mongoose.model('User', UserSchema);
-export default User;
+module.exports = mongoose.model('User', userSchema);
