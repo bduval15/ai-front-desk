@@ -12,6 +12,9 @@ frontend/.env
 .env.test.local
 .env.production.local
 
+#Ai Model Files
+backend/models-storage/*.gguf
+
 # Build outputs
 dist/
 build/

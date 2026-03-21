@@ -1,4 +1,28 @@
 const bcrypt = require('bcryptjs');
+const { LlamaModel, LlamaContext, LlamaChatSession } = require("node-llama-cpp");
+const path = require("path");
+const modelPath = path.join(__dirname, "models-storage", "mistral-7b-instruct-v0.2.Q4_K_M.gguf");
+
+console.log("Initializing Mistral-7B (Local Hosting)...");
+
+const model = new LlamaModel({
+    modelPath: modelPath,
+});
+
+const context = new LlamaContext({ model });
+const session = new LlamaChatSession({ context });
+
+const generateResponse = async (goal) => {
+    const prompt = `System: You are a professional front desk assistant. 
+    User Goal: ${goal}
+    Task: Write a short, 2-sentence opening script for a phone call to achieve this goal. 
+    Assistant Script:`;
+
+    const response = await session.prompt(prompt);
+    return response;
+};
+
+module.exports = { generateResponse };
 
 // 1. REGISTRATION ROUTE (With Hashing)
 app.post('/api/auth/register', async (req, res) => {
