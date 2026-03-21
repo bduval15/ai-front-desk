@@ -4,12 +4,19 @@
 
 @layer base {
   body {
-    @apply bg-slate-50 text-slate-900 antialiased;
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    @apply bg-[#020617] text-slate-200 antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
   }
 }
 
-/* Custom scrollbar for that clean SaaS look */
+.dark-card {
+  @apply bg-slate-900/50 border border-slate-800 backdrop-blur-xl shadow-2xl;
+}
+
+.glow-indigo {
+  box-shadow: 0 0 20px rgba(79, 70, 229, 0.2);
+}
+
 ::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+::-webkit-scrollbar-track { background: #020617; }
+::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
