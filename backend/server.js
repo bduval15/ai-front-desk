@@ -24,6 +24,8 @@ const generateResponse = async (goal) => {
 
 module.exports = { generateResponse };
 
+
+
 // 1. REGISTRATION ROUTE (With Hashing)
 app.post('/api/auth/register', async (req, res) => {
     try {
