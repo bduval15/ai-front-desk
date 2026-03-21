@@ -1,52 +1,70 @@
 import React from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, PhoneCall, History, Settings, LogOut, Cpu, Bell } from 'lucide-react';
+import { LayoutDashboard, PhoneCall, History, Settings, LogOut, Cpu, ShieldAlert, Bell, Users } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 
 const Layout = ({ children, title }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { user, logout } = useAuth();
 
-  const menuItems = [
-    { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
-    { icon: Cpu, label: 'AI Agent Demo', path: '/ai-demo' },
-    { icon: History, label: 'Call History', path: '#' },
-    { icon: Settings, label: 'Settings', path: '#' },
-  ];
+  const isAdmin = user?.role === 'admin';
 
   return (
-    <div className="flex h-screen bg-[#020617] text-slate-200">
-      {/* Sidebar */}
-      <aside className="w-64 bg-slate-950 border-r border-slate-800 flex flex-col">
-        <div className="p-8 flex items-center gap-3 text-indigo-500 font-black text-xl tracking-tighter">
-          <div className="bg-indigo-600 text-white p-1.5 rounded-lg glow-indigo"><PhoneCall size={20} /></div>
-          FrontDesk
+    <div className="flex h-screen bg-[#020617] text-slate-200 font-sans">
+      <aside className="w-72 bg-slate-950 border-r border-slate-800 flex flex-col shadow-2xl z-20">
+        <div className="p-8 flex items-center gap-3 text-indigo-500 font-black text-xl italic tracking-tighter">
+          <div className="bg-indigo-600 text-white p-2 rounded-xl shadow-lg shadow-indigo-500/20"><PhoneCall size={24} /></div>
+          FrontDesk AI
         </div>
         
-        <nav className="flex-1 px-4 space-y-1">
-          {menuItems.map((item) => (
-            <Link key={item.label} to={item.path} className={`flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all ${location.pathname === item.path ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'text-slate-400 hover:bg-slate-900 hover:text-white'}`}>
-              <item.icon size={18} /> {item.label}
-            </Link>
-          ))}
+        <nav className="flex-1 px-4 space-y-6 overflow-y-auto">
+          <div>
+            <p className="px-4 text-[10px] font-black text-slate-600 uppercase tracking-[0.2em] mb-3">Main Console</p>
+            <div className="space-y-1">
+                <Link to="/dashboard" className={`flex items-center gap-3 px-4 py-3 rounded-2xl transition-all ${location.pathname === '/dashboard' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/40' : 'text-slate-400 hover:bg-slate-900 hover:text-white'}`}>
+                    <LayoutDashboard size={18} /> <span className="font-bold text-sm">Call Dispatch</span>
+                </Link>
+                <Link to="/ai-demo" className={`flex items-center gap-3 px-4 py-3 rounded-2xl transition-all ${location.pathname === '/ai-demo' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/40' : 'text-slate-400 hover:bg-slate-900 hover:text-white'}`}>
+                    <Cpu size={18} /> <span className="font-bold text-sm">AI Agent Demo</span>
+                </Link>
+            </div>
+          </div>
+
+          {isAdmin && (
+            <div className="animate-in fade-in slide-in-from-left-4 duration-500">
+              <p className="px-4 text-[10px] font-black text-indigo-500/70 uppercase tracking-[0.2em] mb-3">System Oversight</p>
+              <div className="space-y-1">
+                <Link to="/admin" className={`flex items-center gap-3 px-4 py-3 rounded-2xl transition-all ${location.pathname === '/admin' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'text-slate-400 hover:bg-slate-900 hover:text-white'}`}>
+                    <ShieldAlert size={18} /> <span className="font-bold text-sm">Admin Dashboard</span>
+                </Link>
+              </div>
+            </div>
+          )}
         </nav>
 
-        <div className="p-6 border-t border-slate-800">
-          <button onClick={() => navigate('/login')} className="flex items-center gap-3 w-full px-4 py-3 text-slate-500 hover:text-red-400 transition-colors">
-            <LogOut size={18} /> Logout
+        <div className="p-6 border-t border-slate-900">
+          <div className="mb-4 px-4 py-3 bg-slate-900/50 rounded-2xl border border-slate-800">
+             <p className="text-[10px] uppercase font-black text-slate-500 tracking-widest">Signed in as</p>
+             <p className="text-sm font-bold text-indigo-400 truncate">{user?.email}</p>
+             <p className="text-[10px] font-bold text-slate-600 uppercase mt-0.5 tracking-tighter italic">{user?.role} Access</p>
+          </div>
+          <button onClick={() => { logout(); navigate('/login'); }} className="flex items-center gap-3 w-full px-4 py-3 text-slate-500 hover:text-red-400 transition-all font-bold group">
+            <LogOut size={18} className="group-hover:-translate-x-1 transition-transform" /> Sign Out
           </button>
         </div>
       </aside>
 
-      {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="h-16 border-b border-slate-800 flex items-center justify-between px-8 bg-slate-950/50 backdrop-blur-md">
-          <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-slate-500">{title}</h2>
-          <div className="flex items-center gap-4">
-            <Bell size={18} className="text-slate-500 hover:text-white cursor-pointer" />
-            <div className="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center font-bold text-xs text-white">JD</div>
+        <header className="h-20 bg-slate-950/50 backdrop-blur-xl border-b border-slate-800 flex items-center justify-between px-10">
+          <h2 className="text-xs font-black uppercase tracking-[0.3em] text-slate-500">{title}</h2>
+          <div className="flex items-center gap-6">
+             <div className="h-10 w-10 bg-gradient-to-tr from-indigo-600 to-indigo-400 rounded-2xl border border-white/10 shadow-lg flex items-center justify-center font-black text-white text-xs uppercase">
+                {user?.email?.[0]}
+             </div>
           </div>
         </header>
-        <main className="flex-1 overflow-y-auto p-8 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:24px_24px]">
+        <main className="flex-1 overflow-y-auto p-10 bg-[radial-gradient(#1e293b_0.5px,transparent_0.5px)] [background-size:24px_24px]">
           {children}
         </main>
       </div>

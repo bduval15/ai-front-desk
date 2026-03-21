@@ -1,49 +1,47 @@
-const bcrypt = require('bcryptjs');
-const { LlamaModel, LlamaContext, LlamaChatSession } = require("node-llama-cpp");
-const path = require("path");
-const modelPath = path.join(__dirname, "models-storage", "mistral-7b-instruct-v0.2.Q4_K_M.gguf");
+import "dotenv/config";
+import express from 'express';
+import mongoose from 'mongoose';
+import cors from 'cors';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { generateMistralResponse } from './ai-service.js'; 
+import User from './models/User.js'; 
+const app = express();
+app.use(express.json());
+app.use(cors());
 
-console.log("Initializing Mistral-7B (Local Hosting)...");
+// Database Connection
+mongoose.connect(process.env.MONGO_URI)
+    .then(() => console.log("MongoDB Connected"))
+    .catch(err => console.error("DB Connection Error:", err));
 
-const model = new LlamaModel({
-    modelPath: modelPath,
+// --- AI TEST ROUTE ---
+app.post('/api/ai/test', async (req, res) => {
+    const { prompt } = req.body;
+    try {
+        const aiOutput = await generateMistralResponse(prompt);
+        res.json({ output: aiOutput });
+    } catch (error) {
+        console.error("AI Error:", error);
+        res.status(500).json({ error: "Mistral failed to respond." });
+    }
 });
 
-const context = new LlamaContext({ model });
-const session = new LlamaChatSession({ context });
-
-const generateResponse = async (goal) => {
-    const prompt = `System: You are a professional front desk assistant. 
-    User Goal: ${goal}
-    Task: Write a short, 2-sentence opening script for a phone call to achieve this goal. 
-    Assistant Script:`;
-
-    const response = await session.prompt(prompt);
-    return response;
-};
-
-module.exports = { generateResponse };
-
-
-
-// 1. REGISTRATION ROUTE (With Hashing)
+// --- AUTH: REGISTER ---
 app.post('/api/auth/register', async (req, res) => {
     try {
         const { email, password, role } = req.body;
-
-        // Check if user already exists
         const existingUser = await User.findOne({ email });
         if (existingUser) return res.status(400).json({ message: "User already exists" });
 
-        // HASH THE PASSWORD (Salt factor of 10)
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        // Save to MongoDB
         const newUser = new User({
             email,
             password: hashedPassword,
-            role: role || 'user'
+            role: role || 'user',
+            apiCalls: 0
         });
 
         await newUser.save();
@@ -53,25 +51,32 @@ app.post('/api/auth/register', async (req, res) => {
     }
 });
 
-// 2. LOGIN ROUTE (Comparing Hashed Password)
+// --- AUTH: LOGIN (With JWT) ---
 app.post('/api/auth/login', async (req, res) => {
     try {
         const { email, password } = req.body;
-
-        // Find user in DB
         const user = await User.findOne({ email });
         if (!user) return res.status(400).json({ message: "User not found" });
 
-        // COMPARE hashed password with user input
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
 
-        // If match, send success
+        // Generate JWT
+        const token = jwt.sign(
+            { id: user._id, role: user.role }, 
+            process.env.JWT_SECRET || 'supersecret', 
+            { expiresIn: '1h' }
+        );
+
         res.json({ 
             success: true, 
-            user: { email: user.email, role: user.role } 
+            token,
+            user: { email: user.email, role: user.role, apiCalls: user.apiCalls } 
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
+
+const PORT = 5000;
+app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
