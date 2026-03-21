@@ -1,5 +1,7 @@
 const bcrypt = require('bcryptjs');
 
+
+
 // 1. REGISTRATION ROUTE (With Hashing)
 app.post('/api/auth/register', async (req, res) => {
     try {
