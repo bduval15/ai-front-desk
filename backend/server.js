@@ -61,7 +61,6 @@ app.post('/api/auth/login', async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
 
-        // Generate JWT
         const token = jwt.sign(
             { id: user._id, role: user.role }, 
             process.env.JWT_SECRET || 'supersecret', 
@@ -75,6 +74,20 @@ app.post('/api/auth/login', async (req, res) => {
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
+    }
+});
+
+// ADMIN ONLY ROUTE: Get all user stats
+app.get('/api/admin/users', protect, async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ message: "Access Denied: Admins Only" });
+    }
+
+    try {
+        const users = await User.find({}, '-password'); 
+        res.json(users);
+    } catch (err) {
+        res.status(500).json({ message: "Error fetching system users" });
     }
 });
 
