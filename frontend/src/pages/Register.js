@@ -1,0 +1,1 @@
+export default function Page() { return <div className="p-20 text-center">Coming Soon</div> }
