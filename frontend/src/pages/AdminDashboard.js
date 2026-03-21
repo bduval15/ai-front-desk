@@ -17,8 +17,6 @@ const AdminDashboard = () => {
         {[
           { label: 'Total AI Calls', val: '842', icon: PhoneIncoming, color: 'text-blue-500' },
           { label: 'System Users', val: '24', icon: Users, color: 'text-purple-500' },
-          { label: 'Mistral Latency', val: '1.4s', icon: Activity, color: 'text-green-500' },
-          { label: 'System Health', val: '98%', icon: ShieldCheck, color: 'text-indigo-500' },
         ].map((stat, i) => (
           <div key={i} className="bg-slate-900 border border-slate-800 p-8 rounded-[2rem] shadow-xl relative overflow-hidden group">
              <div className="absolute -bottom-2 -right-2 opacity-5 group-hover:opacity-10 transition-opacity">

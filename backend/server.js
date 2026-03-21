@@ -2,16 +2,18 @@ import "dotenv/config";
 import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
-import bcrypt from 'bcryptjs';
+import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { generateMistralResponse } from './ai-service.js'; 
 import User from './models/User.js'; 
+import { protect } from './middleware/auth.js'; 
+
 const app = express();
 app.use(express.json());
 app.use(cors());
 
 // Database Connection
-mongoose.connect(process.env.MONGO_URI)
+mongoose.connect(process.env.MONGODB_URI)
     .then(() => console.log("MongoDB Connected"))
     .catch(err => console.error("DB Connection Error:", err));
 
@@ -39,7 +41,7 @@ app.post('/api/auth/register', async (req, res) => {
 
         const newUser = new User({
             email,
-            password: hashedPassword,
+            passwordHash: hashedPassword,
             role: role || 'user',
             apiCalls: 0
         });
@@ -56,9 +58,10 @@ app.post('/api/auth/login', async (req, res) => {
     try {
         const { email, password } = req.body;
         const user = await User.findOne({ email });
+        
         if (!user) return res.status(400).json({ message: "User not found" });
-
-        const isMatch = await bcrypt.compare(password, user.password);
+        
+        const isMatch = await bcrypt.compare(password, user.passwordHash);
         if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
 
         const token = jwt.sign(
@@ -70,9 +73,14 @@ app.post('/api/auth/login', async (req, res) => {
         res.json({ 
             success: true, 
             token,
-            user: { email: user.email, role: user.role, apiCalls: user.apiCalls } 
+            user: { 
+                email: user.email, 
+                role: user.role, 
+                apiCalls: user.apiCalls 
+            } 
         });
     } catch (err) {
+        console.error("Login Error:", err.message);
         res.status(500).json({ error: err.message });
     }
 });
@@ -84,7 +92,7 @@ app.get('/api/admin/users', protect, async (req, res) => {
     }
 
     try {
-        const users = await User.find({}, '-password'); 
+        const users = await User.find({}, '-passwordHash'); 
         res.json(users);
     } catch (err) {
         res.status(500).json({ message: "Error fetching system users" });
