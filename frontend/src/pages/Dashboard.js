@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Layout from '../components/Layout';
-import { Send, Phone, AlertTriangle, Zap } from 'lucide-react';
+import { Send, Phone, AlertTriangle, Zap, MessageSquare, History } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 
@@ -9,109 +9,78 @@ const Dashboard = () => {
   const [phone, setPhone] = useState('');
   const [goal, setGoal] = useState('');
   const [loading, setLoading] = useState(false);
+  const [recent, setRecent] = useState([]);
 
-  // Calculate usage inside the component to avoid "undefined" errors
-  const currentCalls = user?.apiCalls || 0;
-  const usagePercent = (currentCalls / 20) * 100;
+  const usagePercent = ((user?.apiCalls || 0) / 20) * 100;
+
+  const fetchData = async () => {
+    try {
+      const res = await axios.get('http://localhost:5000/api/calls/my-calls', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setRecent(res.data.slice(0, 3));
+    } catch (err) { console.error(err); }
+  };
+
+  useEffect(() => { if (token) fetchData(); }, [token]);
 
   const handleDispatch = async (e) => {
     e.preventDefault();
-    if (!phone || !goal) return alert("Please fill in all fields.");
-    
     setLoading(true);
     try {
       const res = await axios.post('http://localhost:5000/api/telephony/make-call', 
-        { phoneNumber: phone, goal, email: user.email },
+        { phoneNumber: phone, goal },
         { headers: { Authorization: `Bearer ${token}` }}
       );
-      
-      // Update the global user state with new call count
       setUser({ ...user, apiCalls: res.data.apiCalls });
-      alert(res.data.script ? `AI Dispatched! Opening line: "${res.data.script}"` : "Call successfully initiated.");
-    } catch (err) {
-      alert("Error initiating call. Check if backend is running.");
-    }
+      fetchData();
+      alert(`Success! AI Script: ${res.data.script}`);
+    } catch (err) { alert("Error"); }
     setLoading(false);
   };
 
   return (
-    <Layout title="AI Call Center">
-      <div className="max-w-4xl mx-auto space-y-8">
-        
-        {/* API USAGE TRACKER SECTION */}
-        <div className="bg-slate-900 border border-slate-800 p-8 rounded-[2.5rem] shadow-2xl relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-8 opacity-10">
-            <Zap size={120} className="text-indigo-500" />
+    <Layout title="AI Command Center">
+      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 space-y-6">
+          {/* USAGE */}
+          <div className="bg-slate-900 border border-slate-800 p-8 rounded-[2rem] shadow-xl">
+            <div className="flex justify-between items-end mb-4 text-xs font-black uppercase text-slate-500 tracking-widest">
+              <span>Usage: {user?.apiCalls}/20 Calls</span>
+              {user?.apiCalls >= 20 && <span className="text-red-500 animate-pulse">Limit Alert</span>}
+            </div>
+            <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
+              <div className={`h-full transition-all duration-1000 ${user?.apiCalls >= 20 ? 'bg-red-500 shadow-[0_0_15px_rgba(239,68,68,0.5)]' : 'bg-indigo-600 shadow-[0_0_15px_rgba(79,70,229,0.5)]'}`} style={{ width: `${Math.min(usagePercent, 100)}%` }}></div>
+            </div>
           </div>
-          
-          <div className="relative z-10">
-            <div className="flex justify-between items-end mb-6">
-              <div>
-                <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-1">Free Tier Allowance</p>
-                <h4 className="text-3xl font-black text-white italic">{currentCalls} <span className="text-slate-700 text-lg">/ 20</span></h4>
-              </div>
-              <div className="text-right">
-                <span className={`text-[10px] font-black px-4 py-1.5 rounded-full border ${currentCalls >= 20 ? 'bg-red-500/10 text-red-500 border-red-500/20' : 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'}`}>
-                  {currentCalls >= 20 ? 'LIMIT EXCEEDED' : 'PROVISIONED'}
-                </span>
-              </div>
-            </div>
 
-            {/* Progress Bar */}
-            <div className="w-full bg-slate-950 h-4 rounded-full overflow-hidden border border-slate-800 p-1">
-              <div 
-                className={`h-full rounded-full transition-all duration-1000 ease-out ${currentCalls >= 20 ? 'bg-red-500 shadow-[0_0_20px_rgba(239,68,68,0.4)]' : 'bg-indigo-600 shadow-[0_0_20px_rgba(79,70,229,0.4)]'}`} 
-                style={{ width: `${Math.min(usagePercent, 100)}%` }}
-              ></div>
-            </div>
-
-            {currentCalls >= 20 && (
-              <div className="mt-6 flex items-center gap-3 text-amber-500 bg-amber-500/5 p-4 rounded-2xl border border-amber-500/10 animate-pulse">
-                <AlertTriangle size={18} />
-                <p className="text-[11px] font-bold uppercase tracking-tight">Warning: API Limit Reached. Additional calls will be queued at lower priority.</p>
-              </div>
-            )}
+          {/* DISPATCH */}
+          <div className="bg-slate-900 p-10 rounded-[2.5rem] border border-slate-800 shadow-2xl">
+            <h3 className="text-white font-black mb-8 flex items-center gap-3 uppercase tracking-tighter"><Phone size={20} className="text-indigo-500" /> Initiate New Call</h3>
+            <form onSubmit={handleDispatch} className="space-y-6">
+              <input type="text" placeholder="Recipient Number" className="w-full bg-slate-950 border border-slate-800 p-4 rounded-2xl text-white outline-none focus:border-indigo-500" onChange={e => setPhone(e.target.value)} />
+              <textarea rows="4" placeholder="Goal (e.g. Confirm my 2pm meeting)" className="w-full bg-slate-950 border border-slate-800 p-4 rounded-2xl text-white outline-none focus:border-indigo-500" onChange={e => setGoal(e.target.value)} />
+              <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 group transition-all">
+                {loading ? "Processing..." : "Dispatch AI Agent"} <Send size={18} className="group-hover:translate-x-1" />
+              </button>
+            </form>
           </div>
         </div>
 
-        {/* CALL DISPATCH FORM */}
-        <div className="bg-slate-900 p-10 rounded-[2.5rem] shadow-2xl border border-slate-800">
-          <h3 className="text-xl font-black mb-8 flex items-center gap-3 text-white uppercase tracking-tighter">
-            <div className="p-2 bg-indigo-600/20 rounded-xl text-indigo-500 shadow-inner"><Phone size={20} /></div>
-            Initiate AI Conversation
-          </h3>
-          <form className="space-y-6" onSubmit={handleDispatch}>
-            <div className="space-y-2">
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Target Recipient Number</label>
-                <input 
-                  type="text" 
-                  placeholder="+1 (555) 000-0000" 
-                  className="w-full px-6 py-4 bg-slate-950 border border-slate-800 rounded-2xl outline-none focus:border-indigo-500 transition-all text-white font-medium placeholder:text-slate-800"
-                  onChange={(e) => setPhone(e.target.value)}
-                />
-            </div>
-            <div className="space-y-2">
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">AI Objective / Instructions</label>
-                <textarea 
-                  rows="4" 
-                  placeholder="e.g. Call this number and schedule an appointment for tomorrow at 2pm..." 
-                  className="w-full px-6 py-4 bg-slate-950 border border-slate-800 rounded-2xl outline-none focus:border-indigo-500 transition-all text-white font-medium placeholder:text-slate-800"
-                  onChange={(e) => setGoal(e.target.value)}
-                />
-            </div>
-            <button 
-              type="submit" 
-              disabled={loading}
-              className="bg-indigo-600 hover:bg-indigo-500 text-white px-12 py-4 rounded-2xl font-black shadow-xl shadow-indigo-500/20 flex items-center gap-3 transition-all disabled:opacity-50 active:scale-95 group"
-            >
-              <Send size={18} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" /> 
-              {loading ? "PROCESSING..." : "DISPATCH AI AGENT"}
-            </button>
-          </form>
+        {/* RECENT TRANSCRIPTS */}
+        <div className="bg-slate-900 border border-slate-800 p-8 rounded-[2.5rem] shadow-xl h-fit">
+          <h3 className="text-white text-xs font-black uppercase mb-6 flex items-center gap-2 tracking-widest"><MessageSquare size={16} className="text-indigo-500" /> Recent Archive</h3>
+          <div className="space-y-4">
+            {recent.map(c => (
+              <div key={c._id} className="p-4 bg-slate-950 rounded-2xl border border-slate-800">
+                <p className="text-[10px] font-black text-indigo-400 mb-1">{c.phoneNumber}</p>
+                <p className="text-[11px] text-slate-500 italic line-clamp-2">{c.transcript}</p>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </Layout>
   );
 };
-
 export default Dashboard;

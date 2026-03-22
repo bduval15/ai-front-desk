@@ -9,6 +9,7 @@ import Landing from './pages/Landing';
 import AIDemo from './pages/AIDemo';
 import AdminDashboard from './pages/AdminDashboard';
 import ResetPassword from './pages/ResetPassword';
+import CallHistory from './pages/CallHistory';
 
 function App() {
   return (
@@ -24,6 +25,7 @@ function App() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/admin" element={<AdminDashboard />} />
           <Route path="/ai-demo" element={<AIDemo />} />
+          <Route path="/call-history" element={<CallHistory />} />
 
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>

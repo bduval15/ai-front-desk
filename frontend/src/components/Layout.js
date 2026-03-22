@@ -25,6 +25,12 @@ const Layout = ({ children, title }) => {
               <Link to="/dashboard" className={`flex items-center gap-3 px-4 py-3 rounded-2xl transition-all ${location.pathname === '/dashboard' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/40' : 'text-slate-400 hover:bg-slate-900 hover:text-white'}`}>
                 <LayoutDashboard size={18} /> <span className="font-bold text-sm">Call Dispatch</span>
               </Link>
+              <Link
+                to="/call-history"
+                className={`flex items-center gap-3 px-4 py-3 rounded-2xl transition-all ${location.pathname === '/call-history' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'}`}
+              >
+                <History size={18} /> <span className="font-bold text-sm">Call History</span>
+              </Link>
               <Link to="/ai-demo" className={`flex items-center gap-3 px-4 py-3 rounded-2xl transition-all ${location.pathname === '/ai-demo' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/40' : 'text-slate-400 hover:bg-slate-900 hover:text-white'}`}>
                 <Cpu size={18} /> <span className="font-bold text-sm">AI Agent Demo</span>
               </Link>
