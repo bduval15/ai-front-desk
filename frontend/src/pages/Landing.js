@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { PhoneCall, Cpu, Shield, Zap, ArrowRight, PlayCircle } from 'lucide-react';
+import { PhoneCall, Cpu, Shield, Zap, ArrowRight, LogIn } from 'lucide-react';
 
 const Landing = () => {
   return (
@@ -22,18 +22,18 @@ const Landing = () => {
           <Zap size={14} /> Powered by Mistral-7B LLM
         </div>
         <h1 className="text-6xl md:text-7xl font-black tracking-tight mb-8 bg-gradient-to-b from-white to-slate-500 bg-clip-text text-transparent leading-tight">
-          The AI Receptionist for <br/> Modern Businesses.
+          The AI Receptionist for <br /> Modern Businesses.
         </h1>
         <p className="text-xl text-slate-400 max-w-2xl mx-auto mb-12 leading-relaxed">
           FrontDesk.ai automates your outbound calls, reminders, and feedback loops with human-like intelligence. Stop wasting time on the phone.
         </p>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
           <Link to="/register" className="w-full sm:w-auto bg-white text-black px-10 py-4 rounded-2xl font-black text-lg hover:bg-slate-200 transition-all flex items-center justify-center gap-2">
-            Start Free Trial <ArrowRight size={20} />
+            Sign Up <ArrowRight size={20} />
           </Link>
-          <button className="w-full sm:w-auto bg-slate-900 border border-slate-800 px-10 py-4 rounded-2xl font-bold text-lg hover:bg-slate-800 transition-all flex items-center justify-center gap-2">
-            <PlayCircle size={20} /> Watch Demo
-          </button>
+          <Link to="/login" className="w-full sm:w-auto bg-slate-900 border border-slate-800 px-10 py-4 rounded-2xl font-bold text-lg hover:bg-slate-800 transition-all flex items-center justify-center gap-2">
+            <LogIn size={20} /> Sign In
+          </Link>
         </div>
       </header>
 
