@@ -33,11 +33,11 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// --- AI TEST ROUTE (For AIDemo Page - Bonus Mark Proof) ---
+// --- AI TEST ROUTE ---
 app.post('/api/ai/test', async (req, res) => {
     const { prompt } = req.body;
     try {
-        const aiOutput = await generateMistralResponse(prompt);
+        const aiOutput = await generateMistralResponse(prompt, true); 
         res.json({ output: aiOutput });
     } catch (error) {
         res.status(500).json({ error: "Mistral failed to respond." });
@@ -106,7 +106,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Email failed" }); }
 });
 
-// --- TELEPHONY: DISPATCH AI CALL (The core logic) ---
+// --- TELEPHONY: DISPATCH AI CALL ---
 app.post('/api/telephony/make-call', protect, async (req, res) => {
     const { phoneNumber, goal } = req.body;
     try {

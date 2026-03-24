@@ -20,15 +20,20 @@ const session = new LlamaChatSession({
     contextSequence: context.getSequence() 
 });
 
-export const generateMistralResponse = async (goal) => {
-    const prompt = `System: You are a professional front desk assistant. 
-    User Goal: ${goal}
-    Task: Write a short, 2-sentence opening script for a phone call to achieve this goal. 
-    Assistant Script:`;
+export const generateMistralResponse = async (userPrompt, isPlayground = false) => {
+    const prompt = isPlayground 
+        ? `[INST] ${userPrompt} [/INST]` 
+        : `System: You are a professional front desk assistant. 
+           User Goal: ${userPrompt}
+           Task: Write a short opening script for a phone call. 
+           Assistant Script:`;
 
     console.log("Mistral is thinking...");
-
-    const response = await session.prompt(prompt);
+    const response = await session.prompt(prompt, {
+        maxTokens: 500, 
+        temperature: 0.7
+    });
+    
     return response;
 };
 
