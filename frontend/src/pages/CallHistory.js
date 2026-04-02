@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/Layout';
 import { Phone, Terminal, Calendar, FileText } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
@@ -22,17 +22,26 @@ const CallHistory = () => {
   const [calls, setCalls] = useState([]);
   const { token } = useAuth();
 
-  useEffect(() => {
-    const fetchHistory = async () => {
-      try {
-        const res = await api.get('/api/calls/my-calls', {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        setCalls(res.data);
-      } catch (err) { console.error("Archive fetch error"); }
-    };
-    if (token) fetchHistory();
+  const fetchHistory = useCallback(async () => {
+    try {
+      const res = await api.get('/api/calls/my-calls', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setCalls(res.data);
+    } catch (err) {
+      console.error('Archive fetch error');
+    }
   }, [token]);
+
+  useEffect(() => {
+    if (!token) {
+      return undefined;
+    }
+
+    fetchHistory();
+    const intervalId = setInterval(fetchHistory, 5000);
+    return () => clearInterval(intervalId);
+  }, [token, fetchHistory]);
 
   return (
     <Layout title="Call Archive">

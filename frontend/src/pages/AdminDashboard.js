@@ -43,7 +43,13 @@ const AdminDashboard = () => {
   }, [token]);
 
   useEffect(() => {
-    if (token) fetchAdminData();
+    if (!token) {
+      return undefined;
+    }
+
+    fetchAdminData();
+    const intervalId = setInterval(fetchAdminData, 5000);
+    return () => clearInterval(intervalId);
   }, [token, fetchAdminData]);
 
   const filteredUsers = users.filter(u => u.email.toLowerCase().includes(searchTerm.toLowerCase()));

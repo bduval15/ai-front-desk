@@ -6,10 +6,24 @@ import Call from '../models/Call.js';
 const STREAM_PATH = '/api/telephony/media-stream';
 const ACTIVE_SESSIONS = new Map();
 
-const OPENAI_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-4o-mini-realtime-preview';
-const GEMINI_LIVE_MODEL = process.env.GEMINI_LIVE_MODEL || 'gemini-live-2.5-flash';
+const OPENAI_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
+const GEMINI_LIVE_MODEL = process.env.GEMINI_LIVE_MODEL || 'gemini-2.5-flash-native-audio-preview-12-2025';
 const DEFAULT_GEMINI_LIVE_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 const VOICE_ENGINE_PROVIDER = (process.env.VOICE_AI_PROVIDER || 'openai').toLowerCase();
+const GEMINI_PREBUILT_VOICE = process.env.GEMINI_VOICE || 'Kore';
+const GEMINI_SETUP_TIMEOUT_MS = Number(process.env.GEMINI_SETUP_TIMEOUT_MS || 5000);
+const TRANSCRIPT_PERSIST_DEBOUNCE_MS = Number(process.env.TRANSCRIPT_PERSIST_DEBOUNCE_MS || 150);
+const TWILIO_AUDIO_FRAME_MS = Number(process.env.TWILIO_AUDIO_FRAME_MS || 20);
+const TWILIO_AUDIO_FRAME_BYTES = Math.max(1, Math.round((8000 * TWILIO_AUDIO_FRAME_MS) / 1000));
+const TWILIO_AUDIO_MIN_BUFFER_MS = Number(process.env.TWILIO_AUDIO_MIN_BUFFER_MS || 80);
+const TWILIO_AUDIO_MIN_BUFFER_BYTES = Math.max(
+  TWILIO_AUDIO_FRAME_BYTES,
+  Math.round((8000 * TWILIO_AUDIO_MIN_BUFFER_MS) / 1000)
+);
+const GEMINI_MODEL_ALIASES = new Map([
+  ['gemini-live-2.5-flash', 'gemini-2.5-flash-native-audio-preview-12-2025'],
+  ['gemini-live-2.5-flash-preview', 'gemini-2.5-flash-native-audio-preview-12-2025']
+]);
 
 const TERMINAL_STATUSES = new Set([
   'Completed',
@@ -44,6 +58,36 @@ const appendEvent = (list = [], event) => {
   return next.slice(-40);
 };
 
+const normalizeTranscriptText = (value = '') => value.replace(/\s+/g, ' ').trim();
+
+const normalizeTranscriptComparison = (value = '') => normalizeTranscriptText(value)
+  .toLowerCase()
+  .replace(/[^a-z0-9]/g, '');
+
+const mergeTranscriptTexts = (previousText = '', nextText = '') => {
+  const previous = normalizeTranscriptText(previousText);
+  const next = normalizeTranscriptText(nextText);
+
+  if (!previous) {
+    return next;
+  }
+
+  if (!next) {
+    return previous;
+  }
+
+  if (next.startsWith(previous)) {
+    return next;
+  }
+
+  if (previous.startsWith(next)) {
+    return previous;
+  }
+
+  const shouldJoinWithoutSpace = /[\s([{'"-]$/.test(previous) || /^[,.;:!?)}\]'"]/.test(next);
+  return `${previous}${shouldJoinWithoutSpace ? '' : ' '}${next}`.replace(/\s+/g, ' ').trim();
+};
+
 const withTrailingSlashRemoved = (value) => value?.replace(/\/+$/, '') || '';
 
 const normalizeGeminiWsUrl = (configuredUrl = '') => {
@@ -58,9 +102,33 @@ const normalizeGeminiWsUrl = (configuredUrl = '') => {
   return configuredUrl;
 };
 
-const normalizeGeminiModelName = (modelName = GEMINI_LIVE_MODEL) => (
-  modelName.startsWith('models/') ? modelName : `models/${modelName}`
+const normalizeGeminiModelName = (modelName = GEMINI_LIVE_MODEL) => {
+  const normalizedModelName = GEMINI_MODEL_ALIASES.get(modelName) || modelName;
+  return normalizedModelName.startsWith('models/')
+    ? normalizedModelName
+    : `models/${normalizedModelName}`;
+};
+
+const isGemini31LiveModel = (modelName = GEMINI_LIVE_MODEL) => (
+  normalizeGeminiModelName(modelName).includes('gemini-3.1-flash-live-preview')
 );
+
+const buildGeminiThinkingConfig = (modelName = GEMINI_LIVE_MODEL) => {
+  if (isGemini31LiveModel(modelName)) {
+    return {
+      thinkingConfig: {
+        thinkingLevel: process.env.GEMINI_THINKING_LEVEL || 'minimal',
+        includeThoughts: false
+      }
+    };
+  }
+
+  return {
+    thinkingConfig: {
+      thinkingBudget: Number(process.env.GEMINI_THINKING_BUDGET || 0)
+    }
+  };
+};
 
 const getTwilioAuthHeader = () => {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -291,7 +359,12 @@ export const registerVoiceSocketServer = ({ server, onCallEnded = noop }) => {
     }
 
     socket.on('message', async (raw) => {
-      await session.handleTwilioMessage(raw.toString());
+      try {
+        await session.handleTwilioMessage(raw.toString());
+      } catch (error) {
+        await session.recordProviderError(error.message);
+        await session.stop('twilio-message-error');
+      }
     });
 
     socket.on('close', async () => {
@@ -320,6 +393,11 @@ class MediaStreamSession {
       voiceEngine: { events: [] }
     };
     this.hasStopped = false;
+    this.persistQueue = Promise.resolve();
+    this.persistTimeout = null;
+    this.outboundAudioBuffer = Buffer.alloc(0);
+    this.outboundAudioInterval = null;
+    this.outboundAudioPrimed = false;
   }
 
   async bootstrap(explicitCallId = '') {
@@ -403,14 +481,52 @@ class MediaStreamSession {
       goal: this.call.goal
     });
 
-    await this.providerBridge.connect();
+    try {
+      await this.providerBridge.connect();
+    } catch (error) {
+      await this.recordProviderError(error.message);
+      await this.stop('voice-provider-connect-failed');
+    }
   }
 
   async addTranscriptEntry(speaker, text) {
-    const trimmedText = (text || '').trim();
+    const trimmedText = normalizeTranscriptText(text);
 
     if (!trimmedText) {
       return;
+    }
+
+    const previousEntry = this.transcriptEntries[this.transcriptEntries.length - 1];
+    const normalizedNext = normalizeTranscriptComparison(trimmedText);
+
+    if (previousEntry?.speaker === speaker) {
+      const normalizedPrevious = normalizeTranscriptComparison(previousEntry.text);
+      const previousTimestamp = new Date(previousEntry.createdAt || 0).getTime();
+      const elapsedMs = Date.now() - previousTimestamp;
+
+      if (normalizedPrevious === normalizedNext) {
+        if (trimmedText.length > previousEntry.text.length) {
+          previousEntry.text = trimmedText;
+          previousEntry.createdAt = new Date();
+          this.scheduleTranscriptPersist();
+        }
+        return;
+      }
+
+      if (
+        elapsedMs < 5000 &&
+        (
+          trimmedText.startsWith(previousEntry.text) ||
+          previousEntry.text.startsWith(trimmedText) ||
+          trimmedText.length <= 32 ||
+          !/[.!?]["']?$/.test(previousEntry.text)
+        )
+      ) {
+        previousEntry.text = mergeTranscriptTexts(previousEntry.text, trimmedText);
+        previousEntry.createdAt = new Date();
+        this.scheduleTranscriptPersist();
+        return;
+      }
     }
 
     this.transcriptEntries.push({
@@ -419,7 +535,18 @@ class MediaStreamSession {
       createdAt: new Date()
     });
 
-    await this.persistTranscript();
+    this.scheduleTranscriptPersist();
+  }
+
+  scheduleTranscriptPersist() {
+    if (this.persistTimeout || !this.call) {
+      return;
+    }
+
+    this.persistTimeout = setTimeout(() => {
+      this.persistTimeout = null;
+      void this.persistTranscript();
+    }, TRANSCRIPT_PERSIST_DEBOUNCE_MS);
   }
 
   async persistTranscript() {
@@ -427,26 +554,84 @@ class MediaStreamSession {
       return;
     }
 
-    const rawTranscript = this.transcriptEntries
-      .map((entry) => `${entry.speaker}: ${entry.text}`)
-      .join('\n');
+    if (this.persistTimeout) {
+      clearTimeout(this.persistTimeout);
+      this.persistTimeout = null;
+    }
 
-    this.call.rawTranscript = rawTranscript;
-    this.call.transcript = rawTranscript;
-    this.call.transcriptEntries = this.transcriptEntries;
-    this.call.rawTelephonyData = {
-      ...(this.call.rawTelephonyData || {}),
-      twilio: {
-        ...((this.call.rawTelephonyData || {}).twilio || {}),
-        events: this.telemetry.twilio.events
-      },
-      voiceEngine: {
-        ...((this.call.rawTelephonyData || {}).voiceEngine || {}),
-        provider: VOICE_ENGINE_PROVIDER,
-        events: this.telemetry.voiceEngine.events
+    this.persistQueue = this.persistQueue
+      .catch(() => undefined)
+      .then(async () => {
+        if (!this.call) {
+          return;
+        }
+
+        const rawTranscript = this.transcriptEntries
+          .map((entry) => `${entry.speaker}: ${entry.text}`)
+          .join('\n');
+
+        this.call.rawTranscript = rawTranscript;
+        this.call.transcript = rawTranscript;
+        this.call.transcriptEntries = [...this.transcriptEntries];
+        this.call.rawTelephonyData = {
+          ...(this.call.rawTelephonyData || {}),
+          twilio: {
+            ...((this.call.rawTelephonyData || {}).twilio || {}),
+            events: this.telemetry.twilio.events
+          },
+          voiceEngine: {
+            ...((this.call.rawTelephonyData || {}).voiceEngine || {}),
+            provider: VOICE_ENGINE_PROVIDER,
+            events: this.telemetry.voiceEngine.events
+          }
+        };
+        await this.call.save();
+      });
+
+    await this.persistQueue;
+  }
+
+  startOutboundAudioPump() {
+    if (this.outboundAudioInterval) {
+      return;
+    }
+
+    this.outboundAudioInterval = setInterval(() => {
+      if (!this.streamSid || this.twilioSocket.readyState !== WebSocket.OPEN) {
+        return;
       }
-    };
-    await this.call.save();
+
+      if (this.outboundAudioBuffer.length === 0) {
+        this.outboundAudioPrimed = false;
+        return;
+      }
+
+      if (!this.outboundAudioPrimed) {
+        if (this.outboundAudioBuffer.length < TWILIO_AUDIO_MIN_BUFFER_BYTES) {
+          return;
+        }
+
+        this.outboundAudioPrimed = true;
+      }
+
+      const nextChunk = this.outboundAudioBuffer.subarray(0, TWILIO_AUDIO_FRAME_BYTES);
+      this.outboundAudioBuffer = this.outboundAudioBuffer.subarray(nextChunk.length);
+
+      this.twilioSocket.send(JSON.stringify({
+        event: 'media',
+        streamSid: this.streamSid,
+        media: { payload: nextChunk.toString('base64') }
+      }));
+    }, TWILIO_AUDIO_FRAME_MS);
+  }
+
+  stopOutboundAudioPump() {
+    if (this.outboundAudioInterval) {
+      clearInterval(this.outboundAudioInterval);
+      this.outboundAudioInterval = null;
+    }
+
+    this.outboundAudioPrimed = false;
   }
 
   sendAudioToTwilio(base64Payload) {
@@ -454,17 +639,22 @@ class MediaStreamSession {
       return;
     }
 
-    this.twilioSocket.send(JSON.stringify({
-      event: 'media',
-      streamSid: this.streamSid,
-      media: { payload: base64Payload }
-    }));
+    const nextAudio = Buffer.from(base64Payload, 'base64');
+    if (nextAudio.length === 0) {
+      return;
+    }
+
+    this.outboundAudioBuffer = Buffer.concat([this.outboundAudioBuffer, nextAudio]);
+    this.startOutboundAudioPump();
   }
 
   clearTwilioAudio() {
     if (!this.streamSid || this.twilioSocket.readyState !== WebSocket.OPEN) {
       return;
     }
+
+    this.outboundAudioBuffer = Buffer.alloc(0);
+    this.outboundAudioPrimed = false;
 
     this.twilioSocket.send(JSON.stringify({
       event: 'clear',
@@ -499,6 +689,9 @@ class MediaStreamSession {
     if (this.callId) {
       ACTIVE_SESSIONS.delete(this.callId);
     }
+    this.stopOutboundAudioPump();
+    this.outboundAudioBuffer = Buffer.alloc(0);
+    this.outboundAudioPrimed = false;
     this.providerBridge?.close();
 
     await this.persistTranscript();
@@ -516,11 +709,26 @@ class MediaStreamSession {
 }
 
 const buildVoiceInstructions = (goal) => [
-  'You are FrontDesk AI, a concise and professional front desk caller.',
+  'You are FrontDesk AI, calling on behalf of the business as a concise and professional outbound caller.',
+  'You are placing an outbound call, not receiving an inbound support call or help request.',
   `Goal: ${goal}`,
   'Keep responses short, natural, and phone-friendly.',
+  'In your first turn, briefly introduce yourself and immediately explain the exact reason for the call.',
+  'State the purpose first, then ask the next direct question needed to complete the goal.',
+  'Do not ask generic inbound-support questions like "How can I help you?" or "What can I do for you?"',
+  'Never reveal internal reasoning, planning, chain-of-thought, or meta commentary.',
+  'Do not use markdown, bullets, stage directions, or narration labels.',
   'Identify whether the outcome is confirmed, rejected, busy, voicemail, or unresolved.',
   'If you reach voicemail, leave a brief message and stop.'
+].join(' ');
+
+const buildOpeningPrompt = (goal) => [
+  'The recipient has answered the outbound call.',
+  'Start naturally in one short opening turn.',
+  `Immediately explain that you are calling about: ${goal}.`,
+  'Your first line should sound like a real outbound call, not customer support.',
+  'After stating the reason, ask only the next specific question needed to move that goal forward.',
+  'Do not ask "How can I help you?" or wait for them to explain why you called.'
 ].join(' ');
 
 const createVoiceProviderBridge = ({ session, goal }) => {
@@ -575,7 +783,7 @@ class OpenAIRealtimeBridge {
         input_audio_format: 'g711_ulaw',
         output_audio_format: 'g711_ulaw',
         input_audio_transcription: {
-          model: process.env.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-mini-transcribe'
+          model: process.env.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe'
         },
         turn_detection: {
           type: 'server_vad',
@@ -592,7 +800,7 @@ class OpenAIRealtimeBridge {
         content: [
           {
             type: 'input_text',
-            text: 'The recipient has answered the phone. Start the conversation now.'
+            text: buildOpeningPrompt(this.goal)
           }
         ]
       }
@@ -632,10 +840,6 @@ class OpenAIRealtimeBridge {
       await this.session.addTranscriptEntry('FrontDesk AI', event.transcript || '');
     }
 
-    if (event.type === 'response.output_text.done') {
-      await this.session.addTranscriptEntry('FrontDesk AI', event.text || '');
-    }
-
     if (event.type === 'error') {
       await this.session.recordProviderError(event.error?.message || 'Realtime voice engine error');
     }
@@ -659,6 +863,25 @@ class GeminiLiveBridge {
     this.session = session;
     this.goal = goal;
     this.socket = null;
+    this.isReady = false;
+    this.pendingAudioMessages = [];
+    this.setupPromise = null;
+    this.resolveSetup = null;
+    this.rejectSetup = null;
+  }
+
+  flushPendingAudioMessages() {
+    while (this.pendingAudioMessages.length > 0) {
+      this.send(this.pendingAudioMessages.shift());
+    }
+  }
+
+  sendRealtimeText(text) {
+    this.send({
+      realtimeInput: {
+        text
+      }
+    });
   }
 
   async connect() {
@@ -684,60 +907,135 @@ class GeminiLiveBridge {
       this.socket.once('error', reject);
     });
 
+    this.setupPromise = new Promise((resolve, reject) => {
+      this.resolveSetup = resolve;
+      this.rejectSetup = reject;
+    });
+
     this.socket.on('message', (data) => {
       void this.handleServerMessage(data.toString());
     });
 
     this.socket.on('error', (error) => {
+      if (!this.isReady) {
+        this.rejectSetup?.(error);
+      }
       void this.session.recordProviderError(error.message);
+    });
+
+    this.socket.on('close', () => {
+      if (!this.isReady) {
+        this.rejectSetup?.(new Error('Gemini Live socket closed before setup completed.'));
+      }
     });
 
     this.send({
       setup: {
         model: normalizeGeminiModelName(GEMINI_LIVE_MODEL),
         generationConfig: {
-          responseModalities: ['AUDIO']
+          responseModalities: ['AUDIO'],
+          ...buildGeminiThinkingConfig(GEMINI_LIVE_MODEL),
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: GEMINI_PREBUILT_VOICE
+              }
+            }
+          }
         },
-        systemInstruction: buildVoiceInstructions(this.goal)
+        systemInstruction: {
+          parts: [
+            {
+              text: buildVoiceInstructions(this.goal)
+            }
+          ]
+        },
+        inputAudioTranscription: {},
+        outputAudioTranscription: {}
       }
     });
 
-    await this.session.recordProviderEvent('gemini-connected', { model: GEMINI_LIVE_MODEL });
+    await Promise.race([
+      this.setupPromise,
+      new Promise((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`Gemini Live setup timed out after ${GEMINI_SETUP_TIMEOUT_MS}ms.`));
+        }, GEMINI_SETUP_TIMEOUT_MS);
+      })
+    ]);
+    await this.session.recordProviderEvent('gemini-connected', {
+      model: normalizeGeminiModelName(GEMINI_LIVE_MODEL),
+      voice: GEMINI_PREBUILT_VOICE
+    });
+
+    this.sendRealtimeText(buildOpeningPrompt(this.goal));
+
+    this.flushPendingAudioMessages();
   }
 
   appendIncomingAudio(base64Payload) {
     const pcm16Base64 = mulaw8kToPcm16kBase64(base64Payload);
-
-    this.send({
+    const audioMessage = {
       realtimeInput: {
-        mediaChunks: [
-          {
-            mimeType: 'audio/pcm;rate=16000',
-            data: pcm16Base64
-          }
-        ]
+        audio: {
+          mimeType: 'audio/pcm;rate=16000',
+          data: pcm16Base64
+        }
       }
-    });
+    };
+
+    if (!this.isReady) {
+      this.pendingAudioMessages.push(audioMessage);
+      this.pendingAudioMessages = this.pendingAudioMessages.slice(-50);
+      return;
+    }
+
+    this.send(audioMessage);
   }
 
   async handleServerMessage(rawMessage) {
     const event = safeJsonParse(rawMessage, {});
 
-    if (event.inputTranscription?.text) {
-      await this.session.addTranscriptEntry('Caller', event.inputTranscription.text);
+    if (event.setupComplete !== undefined) {
+      this.isReady = true;
+      this.resolveSetup?.();
+      this.resolveSetup = null;
+      this.rejectSetup = null;
+
+      await this.session.recordProviderEvent('gemini-setup-complete');
     }
 
-    if (event.outputTranscription?.text) {
-      await this.session.addTranscriptEntry('FrontDesk AI', event.outputTranscription.text);
+    if (event.goAway) {
+      await this.session.recordProviderEvent('gemini-go-away', {
+        timeLeft: event.goAway.timeLeft || ''
+      });
+    }
+
+    if (event.serverContent?.interrupted) {
+      this.session.clearTwilioAudio();
+      await this.session.recordProviderEvent('gemini-interrupted');
+    }
+
+    if (event.serverContent?.inputTranscription?.text) {
+      void this.session.addTranscriptEntry('Caller', event.serverContent.inputTranscription.text);
+    }
+
+    if (event.serverContent?.outputTranscription?.text) {
+      void this.session.addTranscriptEntry('FrontDesk AI', event.serverContent.outputTranscription.text);
     }
 
     const parts = event.serverContent?.modelTurn?.parts || [];
-    parts.forEach((part) => {
+    for (const part of parts) {
       if (part.inlineData?.data) {
-        const twilioAudioPayload = pcm24kBase64ToMulaw8kBase64(part.inlineData.data);
+        const sourceSampleRate = getPcmSampleRateFromMimeType(part.inlineData.mimeType);
+        const twilioAudioPayload = pcmBase64ToMulaw8kBase64(part.inlineData.data, sourceSampleRate);
         this.session.sendAudioToTwilio(twilioAudioPayload);
       }
-    });
+
+      if (part.text && !event.serverContent?.outputTranscription?.text && !part.inlineData?.data) {
+        void this.session.addTranscriptEntry('FrontDesk AI', part.text);
+      }
+    }
   }
 
   send(message) {
@@ -753,30 +1051,42 @@ class GeminiLiveBridge {
   }
 }
 
+const MULAW_BIAS = 0x84;
+const MULAW_CLIP = 32635;
+const MULAW_SEG_END = [0xff, 0x1ff, 0x3ff, 0x7ff, 0xfff, 0x1fff, 0x3fff, 0x7fff];
+
+const findMulawSegment = (value) => {
+  for (let index = 0; index < MULAW_SEG_END.length; index += 1) {
+    if (value <= MULAW_SEG_END[index]) {
+      return index;
+    }
+  }
+
+  return MULAW_SEG_END.length;
+};
+
 const mulawToLinear = (value) => {
-  const MULAW_BIAS = 0x84;
-  let mulaw = ~value & 0xff;
+  const mulaw = (~value) & 0xff;
   const sign = mulaw & 0x80;
   const exponent = (mulaw >> 4) & 0x07;
   const mantissa = mulaw & 0x0f;
-  let sample = ((mantissa << 4) + 0x08) << exponent;
+  let sample = ((mantissa << 3) + MULAW_BIAS) << exponent;
   sample -= MULAW_BIAS;
   return sign ? -sample : sample;
 };
 
 const linearToMulaw = (sample) => {
-  const MULAW_MAX = 0x1fff;
-  const MULAW_BIAS = 33;
-  const sign = sample < 0 ? 0x80 : 0;
-  let magnitude = Math.min(MULAW_MAX, Math.abs(sample) + MULAW_BIAS);
-  let exponent = 7;
+  const clippedSample = Math.max(-MULAW_CLIP, Math.min(MULAW_CLIP, sample));
+  const magnitude = clippedSample < 0 ? MULAW_BIAS - clippedSample : clippedSample + MULAW_BIAS;
+  const segment = findMulawSegment(magnitude);
 
-  for (let expMask = 0x400; (magnitude & expMask) === 0 && exponent > 0; expMask >>= 1) {
-    exponent -= 1;
+  if (segment >= 8) {
+    return (0x7f ^ (clippedSample < 0 ? 0x7f : 0xff)) & 0xff;
   }
 
-  const mantissa = (magnitude >> (exponent + 3)) & 0x0f;
-  return ~(sign | (exponent << 4) | mantissa) & 0xff;
+  const mantissa = (magnitude >> (segment + 3)) & 0x0f;
+  const encoded = (segment << 4) | mantissa;
+  return (encoded ^ (clippedSample < 0 ? 0x7f : 0xff)) & 0xff;
 };
 
 const bufferToInt16 = (buffer) => {
@@ -816,6 +1126,11 @@ const encodeMulawBase64 = (samples) => {
   return buffer.toString('base64');
 };
 
+const getPcmSampleRateFromMimeType = (mimeType = '') => {
+  const match = /rate=(\d+)/i.exec(mimeType) || /sample[-_]?rate=(\d+)/i.exec(mimeType);
+  return Number(match?.[1] || 24000);
+};
+
 const resample = (samples, fromRate, toRate) => {
   if (fromRate === toRate) {
     return samples;
@@ -844,8 +1159,8 @@ const mulaw8kToPcm16kBase64 = (base64Payload) => {
   return int16ToBuffer(pcm16k).toString('base64');
 };
 
-const pcm24kBase64ToMulaw8kBase64 = (base64Payload) => {
-  const pcm24k = bufferToInt16(Buffer.from(base64Payload, 'base64'));
-  const pcm8k = resample(pcm24k, 24000, 8000);
+const pcmBase64ToMulaw8kBase64 = (base64Payload, fromRate = 24000) => {
+  const pcmSamples = bufferToInt16(Buffer.from(base64Payload, 'base64'));
+  const pcm8k = resample(pcmSamples, fromRate, 8000);
   return encodeMulawBase64(pcm8k);
 };

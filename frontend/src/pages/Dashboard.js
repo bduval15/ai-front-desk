@@ -49,7 +49,15 @@ const Dashboard = () => {
     } catch (err) { console.error(err); }
   }, [token]);
 
-  useEffect(() => { if (token) fetchData(); }, [token, fetchData]);
+  useEffect(() => {
+    if (!token) {
+      return undefined;
+    }
+
+    fetchData();
+    const intervalId = setInterval(fetchData, 5000);
+    return () => clearInterval(intervalId);
+  }, [token, fetchData]);
 
   const handleDispatch = async (e) => {
     e.preventDefault();
