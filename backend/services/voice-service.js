@@ -275,24 +275,19 @@ export const registerVoiceSocketServer = ({ server, onCallEnded = noop }) => {
     const requestUrl = new URL(request.url, 'http://localhost');
     const callId = requestUrl.searchParams.get('callId');
 
-    if (!callId) {
-      socket.close();
-      return;
-    }
-
     const session = new MediaStreamSession({
       callId,
       twilioSocket: socket,
       onCallEnded
     });
 
-    ACTIVE_SESSIONS.set(callId, session);
-    try {
-      await session.bootstrap();
-    } catch (error) {
-      ACTIVE_SESSIONS.delete(callId);
-      socket.close();
-      return;
+    if (callId) {
+      try {
+        await session.bootstrap(callId);
+      } catch (error) {
+        socket.close();
+        return;
+      }
     }
 
     socket.on('message', async (raw) => {
@@ -312,7 +307,7 @@ export const registerVoiceSocketServer = ({ server, onCallEnded = noop }) => {
 
 class MediaStreamSession {
   constructor({ callId, twilioSocket, onCallEnded }) {
-    this.callId = callId;
+    this.callId = callId || '';
     this.twilioSocket = twilioSocket;
     this.onCallEnded = onCallEnded;
     this.call = null;
@@ -327,7 +322,14 @@ class MediaStreamSession {
     this.hasStopped = false;
   }
 
-  async bootstrap() {
+  async bootstrap(explicitCallId = '') {
+    const nextCallId = explicitCallId || this.callId;
+
+    if (!nextCallId) {
+      throw new Error('No callId was supplied for the media stream session.');
+    }
+
+    this.callId = nextCallId;
     this.call = await Call.findById(this.callId);
 
     if (!this.call) {
@@ -337,6 +339,8 @@ class MediaStreamSession {
     this.transcriptEntries = Array.isArray(this.call.transcriptEntries)
       ? [...this.call.transcriptEntries]
       : [];
+
+    ACTIVE_SESSIONS.set(this.callId, this);
   }
 
   async handleTwilioMessage(rawMessage) {
@@ -370,6 +374,12 @@ class MediaStreamSession {
   }
 
   async handleStart(startPayload) {
+    const parameterCallId = startPayload.customParameters?.callId || startPayload.customParameters?.CallId || '';
+
+    if (!this.call) {
+      await this.bootstrap(parameterCallId);
+    }
+
     this.streamSid = startPayload.streamSid || this.streamSid;
 
     this.call.providerCallSid = startPayload.callSid || this.call.providerCallSid;
@@ -413,6 +423,10 @@ class MediaStreamSession {
   }
 
   async persistTranscript() {
+    if (!this.call) {
+      return;
+    }
+
     const rawTranscript = this.transcriptEntries
       .map((entry) => `${entry.speaker}: ${entry.text}`)
       .join('\n');
@@ -467,6 +481,10 @@ class MediaStreamSession {
   }
 
   async recordProviderError(message) {
+    if (!this.call) {
+      return;
+    }
+
     this.call.processingError = message;
     await this.recordProviderEvent('error', { message });
     await this.persistTranscript();
@@ -478,10 +496,17 @@ class MediaStreamSession {
     }
 
     this.hasStopped = true;
-    ACTIVE_SESSIONS.delete(this.callId);
+    if (this.callId) {
+      ACTIVE_SESSIONS.delete(this.callId);
+    }
     this.providerBridge?.close();
 
     await this.persistTranscript();
+
+    if (!this.callId || !this.call) {
+      return;
+    }
+
     await this.onCallEnded(this.callId, {
       rawTranscript: this.call.rawTranscript,
       callStatus: this.call.callStatus || 'Completed',
