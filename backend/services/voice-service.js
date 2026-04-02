@@ -8,6 +8,7 @@ const ACTIVE_SESSIONS = new Map();
 
 const OPENAI_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-4o-mini-realtime-preview';
 const GEMINI_LIVE_MODEL = process.env.GEMINI_LIVE_MODEL || 'gemini-live-2.5-flash';
+const DEFAULT_GEMINI_LIVE_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 const VOICE_ENGINE_PROVIDER = (process.env.VOICE_AI_PROVIDER || 'openai').toLowerCase();
 
 const TERMINAL_STATUSES = new Set([
@@ -44,6 +45,22 @@ const appendEvent = (list = [], event) => {
 };
 
 const withTrailingSlashRemoved = (value) => value?.replace(/\/+$/, '') || '';
+
+const normalizeGeminiWsUrl = (configuredUrl = '') => {
+  if (!configuredUrl) {
+    return DEFAULT_GEMINI_LIVE_URL;
+  }
+
+  if (configuredUrl.includes('GenericService/MultimodalLive')) {
+    return DEFAULT_GEMINI_LIVE_URL;
+  }
+
+  return configuredUrl;
+};
+
+const normalizeGeminiModelName = (modelName = GEMINI_LIVE_MODEL) => (
+  modelName.startsWith('models/') ? modelName : `models/${modelName}`
+);
 
 const getTwilioAuthHeader = () => {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -620,19 +637,22 @@ class GeminiLiveBridge {
   }
 
   async connect() {
-    const configuredUrl = process.env.GEMINI_LIVE_WS_URL;
-
-    if (!configuredUrl) {
-      throw new Error('GEMINI_LIVE_WS_URL is not configured.');
-    }
+    const configuredUrl = normalizeGeminiWsUrl(process.env.GEMINI_LIVE_WS_URL);
+    const bearerToken = process.env.GEMINI_BEARER_TOKEN || '';
+    const inferredApiKey = bearerToken.startsWith('AIza') ? bearerToken : '';
+    const explicitApiKey = process.env.GEMINI_API_KEY || '';
+    const geminiUrl = new URL(configuredUrl);
+    const apiKey = explicitApiKey || inferredApiKey;
 
     const headers = {};
 
-    if (process.env.GEMINI_BEARER_TOKEN) {
-      headers.Authorization = `Bearer ${process.env.GEMINI_BEARER_TOKEN}`;
+    if (apiKey) {
+      geminiUrl.searchParams.set('key', apiKey);
+    } else if (bearerToken) {
+      headers.Authorization = `Bearer ${bearerToken}`;
     }
 
-    this.socket = new WebSocket(configuredUrl, { headers });
+    this.socket = new WebSocket(geminiUrl.toString(), { headers });
 
     await new Promise((resolve, reject) => {
       this.socket.once('open', resolve);
@@ -649,13 +669,11 @@ class GeminiLiveBridge {
 
     this.send({
       setup: {
-        model: GEMINI_LIVE_MODEL,
+        model: normalizeGeminiModelName(GEMINI_LIVE_MODEL),
         generationConfig: {
           responseModalities: ['AUDIO']
         },
-        systemInstruction: {
-          parts: [{ text: buildVoiceInstructions(this.goal) }]
-        }
+        systemInstruction: buildVoiceInstructions(this.goal)
       }
     });
 

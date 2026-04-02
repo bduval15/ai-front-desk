@@ -25,10 +25,43 @@ const app = express();
 app.set('trust proxy', true);
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: false }));
-app.use(cors());
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const transcriptProcessingJobs = new Set();
+const normalizeOrigin = (origin = '') => origin.replace(/\/+$/, '');
+const configuredOrigins = new Set(
+    [
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+        process.env.FRONTEND_URL,
+        ...(process.env.ALLOWED_ORIGINS || '').split(',')
+    ]
+        .map((origin) => normalizeOrigin(origin || ''))
+        .filter(Boolean)
+);
+
+const isNgrokOrigin = (origin = '') => /^https:\/\/[a-z0-9-]+\.(ngrok-free\.app|ngrok\.io|ngrok\.app)$/i.test(origin);
+
+const corsOptions = {
+    origin(origin, callback) {
+        if (!origin) {
+            callback(null, true);
+            return;
+        }
+
+        const normalizedOrigin = normalizeOrigin(origin);
+
+        if (configuredOrigins.has(normalizedOrigin) || isNgrokOrigin(normalizedOrigin)) {
+            callback(null, true);
+            return;
+        }
+
+        callback(new Error(`Origin ${origin} is not allowed by CORS.`));
+    },
+    credentials: true
+};
+
+app.use(cors(corsOptions));
 
 mongoose.connect(process.env.MONGODB_URI)
     .then(() => console.log("MongoDB Connected Successfully"))
@@ -200,6 +233,15 @@ const onCallEnded = async (callId, metadata = {}) => {
     await call.save();
     queueTranscriptFormatting(callId);
 };
+
+app.get('/api/health', (req, res) => {
+    res.json({
+        ok: true,
+        voiceProvider: (process.env.VOICE_AI_PROVIDER || 'openai').toLowerCase(),
+        publicBaseUrlConfigured: Boolean(resolvePublicBaseUrl(req)),
+        allowedOrigins: Array.from(configuredOrigins)
+    });
+});
 
 app.post('/api/ai/test', async (req, res) => {
     const { prompt } = req.body;
