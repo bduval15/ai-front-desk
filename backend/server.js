@@ -126,21 +126,127 @@ const buildFallbackSummary = (call) => {
     }
 };
 
+const normalizeWhitespace = (value = '') => value
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;!?])/g, '$1')
+    .trim();
+
+const sentenceCase = (value = '') => {
+    const normalized = normalizeWhitespace(value);
+
+    if (!normalized) {
+        return '';
+    }
+
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+};
+
+const normalizeSpeakerLabel = (speaker = '') => {
+    const normalized = speaker.trim().toLowerCase();
+
+    if (/(front\s*desk|frontdesk|assistant|agent)/.test(normalized)) {
+        return 'FrontDesk AI';
+    }
+
+    if (/(caller|customer|recipient|human|person|user)/.test(normalized)) {
+        return 'Caller';
+    }
+
+    return speaker.trim() || 'Transcript';
+};
+
+const parseTranscriptLines = (transcript = '') => transcript
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+        const match = line.match(/^([^:]+):\s*(.+)$/);
+
+        if (!match) {
+            return {
+                speaker: 'Transcript',
+                message: sentenceCase(line)
+            };
+        }
+
+        return {
+            speaker: normalizeSpeakerLabel(match[1]),
+            message: sentenceCase(match[2])
+        };
+    })
+    .filter((entry) => entry.message);
+
+const isDuplicateTranscriptEntry = (previousEntry, nextEntry) => {
+    if (!previousEntry || !nextEntry) {
+        return false;
+    }
+
+    return (
+        previousEntry.speaker === nextEntry.speaker &&
+        previousEntry.message.toLowerCase() === nextEntry.message.toLowerCase()
+    );
+};
+
+const shouldDropTrailingTranscriptArtifact = (entries = []) => {
+    if (entries.length < 2) {
+        return false;
+    }
+
+    const previousEntry = entries[entries.length - 2];
+    const lastEntry = entries[entries.length - 1];
+
+    if (previousEntry.speaker !== 'FrontDesk AI' || lastEntry.speaker !== 'Caller') {
+        return false;
+    }
+
+    const previousText = previousEntry.message.toLowerCase();
+    const lastText = lastEntry.message.toLowerCase();
+
+    const hasFarewell = /(have a good day|have a great day|goodbye|bye|take care|talk soon|all set then|thanks, that'?s all set)/i.test(previousText);
+    const isShortTail = /^(hi|bye|okay|ok|thanks|thank you|yeah|yep|alright)\.?$/i.test(lastText);
+
+    return hasFarewell && isShortTail;
+};
+
+const sanitizeFormattedTranscript = (transcript = '', call) => {
+    const fallbackTranscript = transcript || call.rawTranscript || call.transcript || '';
+    const entries = parseTranscriptLines(fallbackTranscript);
+
+    const dedupedEntries = entries.filter((entry, index) => !isDuplicateTranscriptEntry(entries[index - 1], entry));
+
+    if (shouldDropTrailingTranscriptArtifact(dedupedEntries)) {
+        dedupedEntries.pop();
+    }
+
+    return dedupedEntries
+        .map((entry) => `${entry.speaker}: ${entry.message}`)
+        .join('\n')
+        .trim();
+};
+
+const sanitizeSummary = (summary = '', call) => {
+    const nextSummary = sentenceCase(summary || buildFallbackSummary(call))
+        .replace(/\bCaller\b/g, 'the caller')
+        .replace(/\bRecipient\b/g, 'the caller');
+
+    return nextSummary.replace(/^The the caller\b/, 'The caller');
+};
+
 const parseFormattedTranscriptPayload = (rawModelOutput, call) => {
     const parsed = extractFirstJsonObject(rawModelOutput);
 
     if (!parsed) {
         return {
-            formattedTranscript: call.rawTranscript,
-            summary: buildFallbackSummary(call),
+            formattedTranscript: sanitizeFormattedTranscript(call.rawTranscript, call),
+            summary: sanitizeSummary(buildFallbackSummary(call), call),
             callStatus: normalizeCallStatus(call.callStatus),
             structuredData: {}
         };
     }
 
     return {
-        formattedTranscript: parsed.formattedTranscript?.trim() || call.rawTranscript,
-        summary: parsed.summary?.trim() || buildFallbackSummary(call),
+        formattedTranscript: sanitizeFormattedTranscript(parsed.formattedTranscript?.trim() || call.rawTranscript, call),
+        summary: sanitizeSummary(parsed.summary?.trim() || buildFallbackSummary(call), call),
         callStatus: normalizeCallStatus(parsed.callStatus, call.callStatus),
         structuredData: parsed.structuredData && typeof parsed.structuredData === 'object'
             ? parsed.structuredData

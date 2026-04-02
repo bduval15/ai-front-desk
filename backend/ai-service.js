@@ -30,7 +30,7 @@ const buildPrompt = (userPrompt, options) => {
     if (options.isFormattingMode) {
         return `[INST]
 You are the transcript post-processor for a front desk AI system.
-Clean the transcript, preserve meaning, remove filler words like um/uh, and extract the outcome.
+Rewrite the raw phone transcript into a clean, readable conversation while preserving meaning.
 
 Return only valid JSON with this exact structure:
 {
@@ -45,6 +45,13 @@ Rules:
 - Keep the summary under 30 words.
 - Use null or {} when data is unavailable.
 - Do not invent details that are not present in the transcript.
+- Remove filler words, repeated fragments, half-finished phrases, and obvious speech-to-text glitches.
+- Fix punctuation, capitalization, split words, and grammar when the intended meaning is clear.
+- Keep the dialogue natural and concise.
+- Use only speaker labels "FrontDesk AI" and "Caller" in formattedTranscript.
+- Put each turn on its own line in the format "Speaker: message".
+- If a final one-word acknowledgment appears after a clear goodbye and adds no new meaning, omit it.
+- Write the summary in natural language. Do not use transcript labels like "Caller:" or "FrontDesk AI:" inside the summary.
 
 Raw transcript:
 ${userPrompt}
