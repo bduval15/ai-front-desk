@@ -24,7 +24,12 @@ const getCallPreview = (call) => {
     return 'Processing Transcript...';
   }
 
-  return call.summary || call.formattedTranscript || call.rawTranscript || call.transcript || 'Call queued.';
+  const transcriptText = call.formattedTranscript || call.rawTranscript || call.transcript;
+  const firstTranscriptLine = transcriptText
+    ? transcriptText.split('\n').map((line) => line.trim()).find(Boolean)
+    : '';
+
+  return call.summary || firstTranscriptLine || 'Call queued.';
 };
 
 const Dashboard = () => {

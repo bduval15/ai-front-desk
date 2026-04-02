@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/Layout';
+import TranscriptView from '../components/TranscriptView';
 import { Users, PhoneIncoming, Search, RefreshCw, Terminal, FileText } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import api from '../lib/api';
@@ -24,7 +25,6 @@ const AdminDashboard = () => {
   const [calls, setCalls] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [rawOpenId, setRawOpenId] = useState(null);
 
   const fetchAdminData = useCallback(async () => {
     setLoading(true);
@@ -164,32 +164,7 @@ const AdminDashboard = () => {
                          : (call.summary || 'Summary pending.')}
                      </p>
                    </div>
-                   <p className="text-[12px] text-slate-300 font-mono leading-relaxed whitespace-pre-wrap">
-                     <span className="text-indigo-500 mr-2 opacity-50">&gt;</span>
-                     {call.transcriptProcessingStatus === 'processing'
-                       ? 'Processing Transcript...'
-                       : (call.formattedTranscript || call.rawTranscript || call.transcript || 'Transcript unavailable.')}
-                   </p>
-                   <button
-                     type="button"
-                     onClick={() => setRawOpenId(rawOpenId === call._id ? null : call._id)}
-                     className="rounded-xl border border-slate-700 px-3 py-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 transition hover:border-indigo-500 hover:text-indigo-300"
-                   >
-                     {rawOpenId === call._id ? 'Hide Raw Telephony Data' : 'Show Raw Telephony Data'}
-                   </button>
-                   {rawOpenId === call._id && (
-                     <pre className="overflow-x-auto rounded-xl border border-slate-800 bg-black/30 p-4 text-[11px] leading-relaxed text-slate-400">
-                       {JSON.stringify({
-                         rawTranscript: call.rawTranscript,
-                         transcriptProcessingStatus: call.transcriptProcessingStatus,
-                         processingError: call.processingError,
-                         answeredBy: call.answeredBy,
-                         durationSeconds: call.durationSeconds,
-                         providerCallSid: call.providerCallSid,
-                         rawTelephonyData: call.rawTelephonyData
-                       }, null, 2)}
-                     </pre>
-                   )}
+                   <TranscriptView call={call} />
                 </div>
               </div>
             )) : (

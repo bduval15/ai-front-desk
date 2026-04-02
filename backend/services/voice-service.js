@@ -16,6 +16,7 @@ const TRANSCRIPT_PERSIST_DEBOUNCE_MS = Number(process.env.TRANSCRIPT_PERSIST_DEB
 const TWILIO_AUDIO_FRAME_MS = Number(process.env.TWILIO_AUDIO_FRAME_MS || 20);
 const TWILIO_AUDIO_FRAME_BYTES = Math.max(1, Math.round((8000 * TWILIO_AUDIO_FRAME_MS) / 1000));
 const TWILIO_AUDIO_MIN_BUFFER_MS = Number(process.env.TWILIO_AUDIO_MIN_BUFFER_MS || 80);
+const TWILIO_AUDIO_REBUFFER_GRACE_MS = Number(process.env.TWILIO_AUDIO_REBUFFER_GRACE_MS || 320);
 const TWILIO_AUDIO_MIN_BUFFER_BYTES = Math.max(
   TWILIO_AUDIO_FRAME_BYTES,
   Math.round((8000 * TWILIO_AUDIO_MIN_BUFFER_MS) / 1000)
@@ -398,6 +399,7 @@ class MediaStreamSession {
     this.outboundAudioBuffer = Buffer.alloc(0);
     this.outboundAudioInterval = null;
     this.outboundAudioPrimed = false;
+    this.lastOutboundAudioAt = 0;
   }
 
   async bootstrap(explicitCallId = '') {
@@ -602,7 +604,9 @@ class MediaStreamSession {
       }
 
       if (this.outboundAudioBuffer.length === 0) {
-        this.outboundAudioPrimed = false;
+        if (Date.now() - this.lastOutboundAudioAt > TWILIO_AUDIO_REBUFFER_GRACE_MS) {
+          this.outboundAudioPrimed = false;
+        }
         return;
       }
 
@@ -645,6 +649,7 @@ class MediaStreamSession {
     }
 
     this.outboundAudioBuffer = Buffer.concat([this.outboundAudioBuffer, nextAudio]);
+    this.lastOutboundAudioAt = Date.now();
     this.startOutboundAudioPump();
   }
 
@@ -655,6 +660,7 @@ class MediaStreamSession {
 
     this.outboundAudioBuffer = Buffer.alloc(0);
     this.outboundAudioPrimed = false;
+    this.lastOutboundAudioAt = 0;
 
     this.twilioSocket.send(JSON.stringify({
       event: 'clear',
@@ -692,6 +698,7 @@ class MediaStreamSession {
     this.stopOutboundAudioPump();
     this.outboundAudioBuffer = Buffer.alloc(0);
     this.outboundAudioPrimed = false;
+    this.lastOutboundAudioAt = 0;
     this.providerBridge?.close();
 
     await this.persistTranscript();
@@ -868,6 +875,8 @@ class GeminiLiveBridge {
     this.setupPromise = null;
     this.resolveSetup = null;
     this.rejectSetup = null;
+    this.outputAudioRemainder = new Int16Array(0);
+    this.outputAudioSampleRate = 24000;
   }
 
   flushPendingAudioMessages() {
@@ -1028,7 +1037,7 @@ class GeminiLiveBridge {
     for (const part of parts) {
       if (part.inlineData?.data) {
         const sourceSampleRate = getPcmSampleRateFromMimeType(part.inlineData.mimeType);
-        const twilioAudioPayload = pcmBase64ToMulaw8kBase64(part.inlineData.data, sourceSampleRate);
+        const twilioAudioPayload = this.convertOutputAudioToTwilio(part.inlineData.data, sourceSampleRate);
         this.session.sendAudioToTwilio(twilioAudioPayload);
       }
 
@@ -1042,6 +1051,23 @@ class GeminiLiveBridge {
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(message));
     }
+  }
+
+  convertOutputAudioToTwilio(base64Payload, sourceSampleRate) {
+    if (sourceSampleRate !== this.outputAudioSampleRate) {
+      this.outputAudioRemainder = new Int16Array(0);
+      this.outputAudioSampleRate = sourceSampleRate;
+    }
+
+    const pcmSamples = bufferToInt16(Buffer.from(base64Payload, 'base64'));
+    const { samples: pcm8k, remainder } = downsamplePcmTo8kWithRemainder(
+      pcmSamples,
+      sourceSampleRate,
+      this.outputAudioRemainder
+    );
+
+    this.outputAudioRemainder = remainder;
+    return encodeMulawBase64(pcm8k);
   }
 
   close() {
@@ -1126,6 +1152,21 @@ const encodeMulawBase64 = (samples) => {
   return buffer.toString('base64');
 };
 
+const concatInt16Arrays = (first, second) => {
+  if (!first?.length) {
+    return second;
+  }
+
+  if (!second?.length) {
+    return first;
+  }
+
+  const merged = new Int16Array(first.length + second.length);
+  merged.set(first, 0);
+  merged.set(second, first.length);
+  return merged;
+};
+
 const getPcmSampleRateFromMimeType = (mimeType = '') => {
   const match = /rate=(\d+)/i.exec(mimeType) || /sample[-_]?rate=(\d+)/i.exec(mimeType);
   return Number(match?.[1] || 24000);
@@ -1153,6 +1194,41 @@ const resample = (samples, fromRate, toRate) => {
   return nextSamples;
 };
 
+const downsamplePcmTo8kWithRemainder = (samples, fromRate, remainder = new Int16Array(0)) => {
+  if (fromRate === 8000) {
+    return { samples, remainder: new Int16Array(0) };
+  }
+
+  const merged = concatInt16Arrays(remainder, samples);
+  const integerRatio = fromRate / 8000;
+
+  if (Number.isInteger(integerRatio) && integerRatio > 1) {
+    const usableLength = merged.length - (merged.length % integerRatio);
+    const output = new Int16Array(usableLength / integerRatio);
+
+    for (let outputIndex = 0; outputIndex < output.length; outputIndex += 1) {
+      let total = 0;
+      const baseIndex = outputIndex * integerRatio;
+
+      for (let offset = 0; offset < integerRatio; offset += 1) {
+        total += merged[baseIndex + offset];
+      }
+
+      output[outputIndex] = Math.round(total / integerRatio);
+    }
+
+    return {
+      samples: output,
+      remainder: merged.slice(usableLength)
+    };
+  }
+
+  return {
+    samples: resample(merged, fromRate, 8000),
+    remainder: new Int16Array(0)
+  };
+};
+
 const mulaw8kToPcm16kBase64 = (base64Payload) => {
   const pcm8k = decodeMulawBase64(base64Payload);
   const pcm16k = resample(pcm8k, 8000, 16000);
@@ -1161,6 +1237,6 @@ const mulaw8kToPcm16kBase64 = (base64Payload) => {
 
 const pcmBase64ToMulaw8kBase64 = (base64Payload, fromRate = 24000) => {
   const pcmSamples = bufferToInt16(Buffer.from(base64Payload, 'base64'));
-  const pcm8k = resample(pcmSamples, fromRate, 8000);
+  const { samples: pcm8k } = downsamplePcmTo8kWithRemainder(pcmSamples, fromRate);
   return encodeMulawBase64(pcm8k);
 };

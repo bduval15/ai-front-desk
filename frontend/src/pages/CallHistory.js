@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/Layout';
-import { Phone, Terminal, Calendar, FileText } from 'lucide-react';
+import TranscriptView from '../components/TranscriptView';
+import { Phone, Calendar, FileText } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import api from '../lib/api';
 
@@ -71,15 +72,7 @@ const CallHistory = () => {
                 </p>
               </div>
 
-              <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 font-mono text-[13px] leading-relaxed relative overflow-hidden whitespace-pre-wrap">
-                <Terminal size={120} className="absolute -right-10 -bottom-10 text-white/[0.02]" />
-                <span className="text-indigo-500 mr-2 align-top">&gt;</span>
-                <span className="text-slate-300 italic">
-                  {c.transcriptProcessingStatus === 'processing'
-                    ? 'Processing Transcript...'
-                    : (c.formattedTranscript || c.rawTranscript || c.transcript || 'Transcript unavailable.')}
-                </span>
-              </div>
+              <TranscriptView call={c} />
             </div>
           </div>
         ))}
