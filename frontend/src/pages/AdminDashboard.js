@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/Layout';
 import { Users, PhoneIncoming, Search, RefreshCw, Terminal, FileText } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import axios from 'axios';
+import api from '../lib/api';
 
 const getStatusClasses = (status = '') => {
   const normalized = status.toLowerCase();
@@ -30,8 +30,8 @@ const AdminDashboard = () => {
     setLoading(true);
     try {
       const [userRes, callRes] = await Promise.all([
-        axios.get('http://localhost:5000/api/admin/users', { headers: { Authorization: `Bearer ${token}` } }),
-        axios.get('http://localhost:5000/api/admin/all-calls', { headers: { Authorization: `Bearer ${token}` } })
+        api.get('/api/admin/users', { headers: { Authorization: `Bearer ${token}` } }),
+        api.get('/api/admin/all-calls', { headers: { Authorization: `Bearer ${token}` } })
       ]);
       setUsers(userRes.data);
       setCalls(callRes.data);

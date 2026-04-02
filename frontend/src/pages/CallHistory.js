@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Layout from '../components/Layout';
 import { Phone, Terminal, Calendar, FileText } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import axios from 'axios';
+import api from '../lib/api';
 
 const getStatusClasses = (status = '') => {
   const normalized = status.toLowerCase();
@@ -25,7 +25,7 @@ const CallHistory = () => {
   useEffect(() => {
     const fetchHistory = async () => {
       try {
-        const res = await axios.get('http://localhost:5000/api/calls/my-calls', {
+        const res = await api.get('/api/calls/my-calls', {
           headers: { Authorization: `Bearer ${token}` }
         });
         setCalls(res.data);

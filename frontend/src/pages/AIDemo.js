@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import Layout from '../components/Layout';
 import { Terminal, Play, Loader2, Sparkles } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import axios from 'axios';
+import api from '../lib/api';
 
 const AIDemo = () => {
   const { token } = useAuth();
@@ -16,7 +16,7 @@ const AIDemo = () => {
     setOutput(""); 
     
     try {
-      const res = await axios.post('http://localhost:5000/api/ai/test', 
+      const res = await api.post('/api/ai/test', 
         { prompt },
         { headers: { Authorization: `Bearer ${token}` }}
       );

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { UserPlus, Mail, Lock, User, ArrowRight, ShieldCheck } from 'lucide-react';
-import axios from 'axios';
+import api from '../lib/api';
 
 const Register = () => {
   const navigate = useNavigate();
@@ -17,7 +17,7 @@ const Register = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const response = await axios.post('http://localhost:5000/api/auth/register', {
+      const response = await api.post('/api/auth/register', {
         email: formData.email,
         password: formData.password,
         role: 'user' 

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/Layout';
 import { Send, Phone, AlertTriangle, MessageSquare } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import axios from 'axios';
+import api from '../lib/api';
 
 const CALL_LIMIT = 20;
 
@@ -42,7 +42,7 @@ const Dashboard = () => {
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await axios.get('http://localhost:5000/api/calls/my-calls', {
+      const res = await api.get('/api/calls/my-calls', {
         headers: { Authorization: `Bearer ${token}` }
       });
       setRecent(res.data.slice(0, 3));
@@ -56,7 +56,7 @@ const Dashboard = () => {
     setLoading(true);
 
     try {
-      const res = await axios.post('http://localhost:5000/api/telephony/make-call',
+      const res = await api.post('/api/telephony/make-call',
         { phoneNumber: phone, goal },
         { headers: { Authorization: `Bearer ${token}` } }
       );
