@@ -343,7 +343,7 @@ const onCallEnded = async (callId, metadata = {}) => {
 app.get('/api/health', (req, res) => {
     res.json({
         ok: true,
-        voiceProvider: (process.env.VOICE_AI_PROVIDER || 'openai').toLowerCase(),
+        voiceProvider: 'gemini',
         publicBaseUrlConfigured: Boolean(resolvePublicBaseUrl(req)),
         allowedOrigins: Array.from(configuredOrigins)
     });
@@ -522,7 +522,7 @@ app.post('/api/telephony/make-call', protect, async (req, res) => {
             goal,
             callStatus: 'Queued',
             transcriptProcessingStatus: 'pending',
-            provider: (process.env.VOICE_AI_PROVIDER || 'openai').toLowerCase(),
+            provider: 'gemini',
             rawTelephonyData: {
                 request: {
                     at: new Date().toISOString(),

@@ -19,7 +19,7 @@ const CallSchema = new mongoose.Schema({
   transcriptProcessingStatus: { type: String, default: 'pending' },
   processingError: { type: String, default: '' },
   structuredData: { type: mongoose.Schema.Types.Mixed, default: {} },
-  provider: { type: String, default: 'openai' },
+  provider: { type: String, default: 'gemini' },
   providerCallSid: { type: String, default: '' },
   answeredBy: { type: String, default: '' },
   durationSeconds: { type: Number, default: 0 },

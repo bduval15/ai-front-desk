@@ -6,10 +6,9 @@ import Call from '../models/Call.js';
 const STREAM_PATH = '/api/telephony/media-stream';
 const ACTIVE_SESSIONS = new Map();
 
-const OPENAI_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
 const GEMINI_LIVE_MODEL = process.env.GEMINI_LIVE_MODEL || 'gemini-2.5-flash-native-audio-preview-12-2025';
 const DEFAULT_GEMINI_LIVE_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
-const VOICE_ENGINE_PROVIDER = (process.env.VOICE_AI_PROVIDER || 'openai').toLowerCase();
+const VOICE_ENGINE_PROVIDER = 'gemini';
 const GEMINI_PREBUILT_VOICE = process.env.GEMINI_VOICE || 'Kore';
 const GEMINI_SETUP_TIMEOUT_MS = Number(process.env.GEMINI_SETUP_TIMEOUT_MS || 5000);
 const TRANSCRIPT_PERSIST_DEBOUNCE_MS = Number(process.env.TRANSCRIPT_PERSIST_DEBOUNCE_MS || 150);
@@ -739,131 +738,8 @@ const buildOpeningPrompt = (goal) => [
 ].join(' ');
 
 const createVoiceProviderBridge = ({ session, goal }) => {
-  if (VOICE_ENGINE_PROVIDER === 'gemini') {
-    return new GeminiLiveBridge({ session, goal });
-  }
-
-  return new OpenAIRealtimeBridge({ session, goal });
+  return new GeminiLiveBridge({ session, goal });
 };
-
-class OpenAIRealtimeBridge {
-  constructor({ session, goal }) {
-    this.session = session;
-    this.goal = goal;
-    this.socket = null;
-  }
-
-  async connect() {
-    const apiKey = process.env.OPENAI_API_KEY;
-
-    if (!apiKey) {
-      throw new Error('OPENAI_API_KEY is not configured.');
-    }
-
-    const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(OPENAI_REALTIME_MODEL)}`;
-
-    this.socket = new WebSocket(url, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'OpenAI-Beta': 'realtime=v1'
-      }
-    });
-
-    await new Promise((resolve, reject) => {
-      this.socket.once('open', resolve);
-      this.socket.once('error', reject);
-    });
-
-    this.socket.on('message', (data) => {
-      void this.handleServerMessage(data.toString());
-    });
-
-    this.socket.on('error', (error) => {
-      void this.session.recordProviderError(error.message);
-    });
-
-    this.send({
-      type: 'session.update',
-      session: {
-        instructions: buildVoiceInstructions(this.goal),
-        voice: process.env.OPENAI_VOICE || 'alloy',
-        input_audio_format: 'g711_ulaw',
-        output_audio_format: 'g711_ulaw',
-        input_audio_transcription: {
-          model: process.env.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe'
-        },
-        turn_detection: {
-          type: 'server_vad',
-          silence_duration_ms: 650
-        }
-      }
-    });
-
-    this.send({
-      type: 'conversation.item.create',
-      item: {
-        type: 'message',
-        role: 'user',
-        content: [
-          {
-            type: 'input_text',
-            text: buildOpeningPrompt(this.goal)
-          }
-        ]
-      }
-    });
-
-    this.send({ type: 'response.create' });
-    await this.session.recordProviderEvent('openai-connected', { model: OPENAI_REALTIME_MODEL });
-  }
-
-  appendIncomingAudio(base64Payload) {
-    this.send({
-      type: 'input_audio_buffer.append',
-      audio: base64Payload
-    });
-  }
-
-  async handleServerMessage(rawMessage) {
-    const event = safeJsonParse(rawMessage, {});
-
-    if (!event?.type) {
-      return;
-    }
-
-    if (event.type === 'input_audio_buffer.speech_started') {
-      this.session.clearTwilioAudio();
-    }
-
-    if (event.type === 'conversation.item.input_audio_transcription.completed') {
-      await this.session.addTranscriptEntry('Caller', event.transcript || '');
-    }
-
-    if (event.type === 'response.output_audio.delta' && event.delta) {
-      this.session.sendAudioToTwilio(event.delta);
-    }
-
-    if (event.type === 'response.output_audio_transcript.done') {
-      await this.session.addTranscriptEntry('FrontDesk AI', event.transcript || '');
-    }
-
-    if (event.type === 'error') {
-      await this.session.recordProviderError(event.error?.message || 'Realtime voice engine error');
-    }
-  }
-
-  send(message) {
-    if (this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify(message));
-    }
-  }
-
-  close() {
-    if (this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.close();
-    }
-  }
-}
 
 class GeminiLiveBridge {
   constructor({ session, goal }) {
