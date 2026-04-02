@@ -1,24 +1,37 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Layout from '../components/Layout';
-import { Users, PhoneIncoming, MessageSquare, Search, ShieldCheck, RefreshCw, AlertCircle, Terminal } from 'lucide-react';
+import { Users, PhoneIncoming, Search, RefreshCw, Terminal, FileText } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
+
+const getStatusClasses = (status = '') => {
+  const normalized = status.toLowerCase();
+
+  if (['confirmed', 'completed'].includes(normalized)) {
+    return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300';
+  }
+
+  if (['busy', 'voicemail', 'no answer', 'failed', 'rejected', 'canceled'].includes(normalized)) {
+    return 'border-rose-500/20 bg-rose-500/10 text-rose-300';
+  }
+
+  return 'border-amber-500/20 bg-amber-500/10 text-amber-300';
+};
 
 const AdminDashboard = () => {
   const { token } = useAuth();
   const [users, setUsers] = useState([]);
-  const [calls, setCalls] = useState([]); // State for Transcripts
+  const [calls, setCalls] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [rawOpenId, setRawOpenId] = useState(null);
 
-  // 1. Unified Fetch Function
   const fetchAdminData = useCallback(async () => {
     setLoading(true);
     try {
-      // Fetch both Users and All Calls simultaneously
       const [userRes, callRes] = await Promise.all([
-        axios.get('http://localhost:5000/api/admin/users', { headers: { Authorization: `Bearer ${token}` }}),
-        axios.get('http://localhost:5000/api/admin/all-calls', { headers: { Authorization: `Bearer ${token}` }})
+        axios.get('http://localhost:5000/api/admin/users', { headers: { Authorization: `Bearer ${token}` } }),
+        axios.get('http://localhost:5000/api/admin/all-calls', { headers: { Authorization: `Bearer ${token}` } })
       ]);
       setUsers(userRes.data);
       setCalls(callRes.data);
@@ -33,18 +46,17 @@ const AdminDashboard = () => {
     if (token) fetchAdminData();
   }, [token, fetchAdminData]);
 
-  // Search logic
   const filteredUsers = users.filter(u => u.email.toLowerCase().includes(searchTerm.toLowerCase()));
   const totalCalls = users.reduce((acc, curr) => acc + (curr.apiCalls || 0), 0);
+  const processingCalls = calls.filter((call) => call.transcriptProcessingStatus === 'processing').length;
 
   return (
     <Layout title="Administrator Oversight">
-      {/* 1. UPDATED STATS CARDS */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
         {[
           { label: 'System Users', val: users.length, icon: Users, color: 'text-purple-500' },
           { label: 'Global Call Volume', val: totalCalls, icon: PhoneIncoming, color: 'text-blue-500' },
-          { label: 'Total Transcripts', val: calls.length, icon: Terminal, color: 'text-indigo-500' },
+          { label: 'Processing Queue', val: processingCalls, icon: Terminal, color: 'text-indigo-500' },
         ].map((stat, i) => (
           <div key={i} className="bg-slate-900 border border-slate-800 p-8 rounded-[2rem] shadow-xl relative overflow-hidden group">
              <div className="absolute -bottom-2 -right-2 opacity-5 group-hover:opacity-10 transition-opacity">
@@ -59,7 +71,6 @@ const AdminDashboard = () => {
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
         
-        {/* 2. CONSUMER USAGE TABLE (Your original favorite) */}
         <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden shadow-2xl">
           <div className="p-8 border-b border-slate-800 flex justify-between items-center bg-slate-950/30">
              <h3 className="font-black text-white uppercase text-sm flex items-center gap-2">
@@ -108,11 +119,10 @@ const AdminDashboard = () => {
           </div>
         </div>
 
-        {/* 3. NEW: GLOBAL TRANSCRIPT LOG */}
         <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden shadow-2xl flex flex-col h-[610px]">
           <div className="p-8 border-b border-slate-800 bg-slate-950/30 flex justify-between items-center">
              <h3 className="font-black text-white uppercase text-sm flex items-center gap-2">
-                <Terminal size={18} className="text-indigo-500" /> System Transcripts
+                <Terminal size={18} className="text-indigo-500" /> System Calls
              </h3>
              <button onClick={fetchAdminData} className="text-slate-500 hover:text-indigo-500 transition-colors">
                 <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
@@ -126,17 +136,54 @@ const AdminDashboard = () => {
                     <p className="text-indigo-400 font-black text-[10px] uppercase tracking-tighter">{call.userEmail}</p>
                     <p className="text-white font-bold text-xs mt-1 italic">{call.phoneNumber}</p>
                   </div>
-                  <span className="text-[9px] text-slate-700 font-mono">
-                    {new Date(call.createdAt).toLocaleTimeString()}
-                  </span>
+                  <div className="flex flex-col items-end gap-2">
+                    <span className={`rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-widest ${getStatusClasses(call.callStatus)}`}>
+                      {call.callStatus || 'Queued'}
+                    </span>
+                    <span className="text-[9px] text-slate-700 font-mono">
+                      {new Date(call.createdAt).toLocaleTimeString()}
+                    </span>
+                  </div>
                 </div>
-                <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800/50 relative overflow-hidden">
+                <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800/50 relative overflow-hidden space-y-4">
                    <div className="absolute top-0 left-0 w-1 h-full bg-indigo-500/20 group-hover:bg-indigo-500 transition-colors"></div>
                    <p className="text-[10px] text-slate-500 font-black uppercase mb-2 tracking-widest opacity-50 italic">Goal: {call.goal}</p>
-                   <p className="text-[12px] text-slate-300 font-mono leading-relaxed">
+                   <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-3">
+                     <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">
+                       <FileText size={14} className="text-indigo-500" /> Summary
+                     </div>
+                     <p className="text-[12px] leading-relaxed text-slate-200">
+                       {call.transcriptProcessingStatus === 'processing'
+                         ? 'Processing Transcript...'
+                         : (call.summary || 'Summary pending.')}
+                     </p>
+                   </div>
+                   <p className="text-[12px] text-slate-300 font-mono leading-relaxed whitespace-pre-wrap">
                      <span className="text-indigo-500 mr-2 opacity-50">&gt;</span>
-                     {call.transcript}
+                     {call.transcriptProcessingStatus === 'processing'
+                       ? 'Processing Transcript...'
+                       : (call.formattedTranscript || call.rawTranscript || call.transcript || 'Transcript unavailable.')}
                    </p>
+                   <button
+                     type="button"
+                     onClick={() => setRawOpenId(rawOpenId === call._id ? null : call._id)}
+                     className="rounded-xl border border-slate-700 px-3 py-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 transition hover:border-indigo-500 hover:text-indigo-300"
+                   >
+                     {rawOpenId === call._id ? 'Hide Raw Telephony Data' : 'Show Raw Telephony Data'}
+                   </button>
+                   {rawOpenId === call._id && (
+                     <pre className="overflow-x-auto rounded-xl border border-slate-800 bg-black/30 p-4 text-[11px] leading-relaxed text-slate-400">
+                       {JSON.stringify({
+                         rawTranscript: call.rawTranscript,
+                         transcriptProcessingStatus: call.transcriptProcessingStatus,
+                         processingError: call.processingError,
+                         answeredBy: call.answeredBy,
+                         durationSeconds: call.durationSeconds,
+                         providerCallSid: call.providerCallSid,
+                         rawTelephonyData: call.rawTelephonyData
+                       }, null, 2)}
+                     </pre>
+                   )}
                 </div>
               </div>
             )) : (

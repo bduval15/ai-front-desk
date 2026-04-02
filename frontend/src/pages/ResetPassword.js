@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { KeyRound, Lock, CheckCircle2, ArrowRight, Loader2, ShieldCheck } from 'lucide-react';
 import axios from 'axios';
 

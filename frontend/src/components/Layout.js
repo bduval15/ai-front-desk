@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, PhoneCall, History, Settings, LogOut, Cpu, ShieldAlert, Bell, Users } from 'lucide-react';
+import { LayoutDashboard, PhoneCall, History, LogOut, Cpu, ShieldAlert } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const Layout = ({ children, title }) => {
