@@ -5,10 +5,43 @@ const getTranscriptText = (call) => (
   call.formattedTranscript || call.rawTranscript || call.transcript || ''
 );
 
-const normalizeMessage = (value = '') => value
+const repairFragmentedWords = (value = '') => {
+  let repaired = value;
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    const next = repaired
+      .replace(/\b([A-Za-z]{1,4})\s+([A-Za-z])(?=[,.;!?]|\s|$)/g, '$1$2')
+      .replace(/\b([A-Za-z])\s+([A-Za-z]{1,4})\b/g, '$1$2');
+
+    if (next === repaired) {
+      break;
+    }
+
+    repaired = next;
+  }
+
+  return repaired;
+};
+
+const stripOutcomeLabel = (value = '') => value
+  .replace(/\s*(?:Outcome|Call status|Status)\s*:\s*(confirmed|rejected|busy|voicemail|unresolved|completed|pending|no answer|canceled)\.?\s*/ig, ' ')
   .replace(/\s+/g, ' ')
-  .replace(/\s+([,.;!?])/g, '$1')
   .trim();
+
+const normalizeMessage = (value = '', role = 'system') => {
+  let normalized = value
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;!?])/g, '$1')
+    .trim();
+
+  normalized = repairFragmentedWords(normalized);
+
+  if (role === 'agent') {
+    normalized = stripOutcomeLabel(normalized);
+  }
+
+  return normalized;
+};
 
 const parseTranscriptEntries = (text) => (
   text
@@ -28,7 +61,6 @@ const parseTranscriptEntries = (text) => (
       }
 
       const speaker = match[1].trim();
-      const message = normalizeMessage(match[2]);
       const normalizedSpeaker = speaker.toLowerCase();
 
       let role = 'system';
@@ -37,6 +69,8 @@ const parseTranscriptEntries = (text) => (
       } else if (normalizedSpeaker.includes('frontdesk') || normalizedSpeaker.includes('agent')) {
         role = 'agent';
       }
+
+      const message = normalizeMessage(match[2], role);
 
       return {
         id: `${index}-${speaker}-${message}`,

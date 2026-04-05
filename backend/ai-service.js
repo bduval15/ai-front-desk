@@ -51,6 +51,7 @@ Rules:
 - Use only speaker labels "FrontDesk AI" and "Caller" in formattedTranscript.
 - Put each turn on its own line in the format "Speaker: message".
 - If a final one-word acknowledgment appears after a clear goodbye and adds no new meaning, omit it.
+- Remove any internal labels such as "Outcome: rejected" or "Status: confirmed" from spoken dialogue.
 - Write the summary in natural language. Do not use transcript labels like "Caller:" or "FrontDesk AI:" inside the summary.
 
 Raw transcript:

@@ -16,6 +16,7 @@ const TWILIO_AUDIO_FRAME_MS = Number(process.env.TWILIO_AUDIO_FRAME_MS || 20);
 const TWILIO_AUDIO_FRAME_BYTES = Math.max(1, Math.round((8000 * TWILIO_AUDIO_FRAME_MS) / 1000));
 const TWILIO_AUDIO_MIN_BUFFER_MS = Number(process.env.TWILIO_AUDIO_MIN_BUFFER_MS || 80);
 const TWILIO_AUDIO_REBUFFER_GRACE_MS = Number(process.env.TWILIO_AUDIO_REBUFFER_GRACE_MS || 320);
+const TWILIO_OUTPUT_GAIN = Math.min(1.2, Math.max(0.5, Number(process.env.TWILIO_OUTPUT_GAIN || 0.9)));
 const TWILIO_AUDIO_MIN_BUFFER_BYTES = Math.max(
   TWILIO_AUDIO_FRAME_BYTES,
   Math.round((8000 * TWILIO_AUDIO_MIN_BUFFER_MS) / 1000)
@@ -58,7 +59,39 @@ const appendEvent = (list = [], event) => {
   return next.slice(-40);
 };
 
-const normalizeTranscriptText = (value = '') => value.replace(/\s+/g, ' ').trim();
+const repairFragmentedTranscriptWords = (value = '') => {
+  let repaired = value;
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    const next = repaired
+      .replace(/\b([A-Za-z]{1,4})\s+([A-Za-z])(?=[,.;!?]|\s|$)/g, '$1$2')
+      .replace(/\b([A-Za-z])\s+([A-Za-z]{1,4})\b/g, '$1$2');
+
+    if (next === repaired) {
+      break;
+    }
+
+    repaired = next;
+  }
+
+  return repaired;
+};
+
+const stripInternalOutcomeLabels = (value = '') => value
+  .replace(/\s*(?:Outcome|Call status|Status)\s*:\s*(confirmed|rejected|busy|voicemail|unresolved|completed|pending|no answer|canceled)\.?\s*/ig, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const normalizeTranscriptText = (value = '', speaker = '') => {
+  let normalized = value.replace(/\s+/g, ' ').trim();
+  normalized = repairFragmentedTranscriptWords(normalized);
+
+  if (speaker === 'FrontDesk AI') {
+    normalized = stripInternalOutcomeLabels(normalized);
+  }
+
+  return normalized;
+};
 
 const normalizeTranscriptComparison = (value = '') => normalizeTranscriptText(value)
   .toLowerCase()
@@ -491,7 +524,7 @@ class MediaStreamSession {
   }
 
   async addTranscriptEntry(speaker, text) {
-    const trimmedText = normalizeTranscriptText(text);
+    const trimmedText = normalizeTranscriptText(text, speaker);
 
     if (!trimmedText) {
       return;
@@ -724,7 +757,8 @@ const buildVoiceInstructions = (goal) => [
   'Do not ask generic inbound-support questions like "How can I help you?" or "What can I do for you?"',
   'Never reveal internal reasoning, planning, chain-of-thought, or meta commentary.',
   'Do not use markdown, bullets, stage directions, or narration labels.',
-  'Identify whether the outcome is confirmed, rejected, busy, voicemail, or unresolved.',
+  'Internally determine whether the outcome is confirmed, rejected, busy, voicemail, or unresolved, but never say labels like "Outcome: rejected" or "Status: confirmed" aloud.',
+  'When the call ends, close naturally like a real person with a short conversational goodbye.',
   'If you reach voicemail, leave a brief message and stop.'
 ].join(' ');
 
@@ -905,11 +939,12 @@ class GeminiLiveBridge {
       void this.session.addTranscriptEntry('Caller', event.serverContent.inputTranscription.text);
     }
 
-    if (event.serverContent?.outputTranscription?.text) {
-      void this.session.addTranscriptEntry('FrontDesk AI', event.serverContent.outputTranscription.text);
-    }
-
     const parts = event.serverContent?.modelTurn?.parts || [];
+    let bestAssistantTranscript = normalizeTranscriptText(
+      event.serverContent?.outputTranscription?.text || '',
+      'FrontDesk AI'
+    );
+
     for (const part of parts) {
       if (part.inlineData?.data) {
         const sourceSampleRate = getPcmSampleRateFromMimeType(part.inlineData.mimeType);
@@ -917,9 +952,17 @@ class GeminiLiveBridge {
         this.session.sendAudioToTwilio(twilioAudioPayload);
       }
 
-      if (part.text && !event.serverContent?.outputTranscription?.text && !part.inlineData?.data) {
-        void this.session.addTranscriptEntry('FrontDesk AI', part.text);
+      if (part.text) {
+        const candidateTranscript = normalizeTranscriptText(part.text, 'FrontDesk AI');
+
+        if (candidateTranscript.length > bestAssistantTranscript.length + 8) {
+          bestAssistantTranscript = candidateTranscript;
+        }
       }
+    }
+
+    if (bestAssistantTranscript) {
+      void this.session.addTranscriptEntry('FrontDesk AI', bestAssistantTranscript);
     }
   }
 
@@ -943,7 +986,7 @@ class GeminiLiveBridge {
     );
 
     this.outputAudioRemainder = remainder;
-    return encodeMulawBase64(pcm8k);
+    return encodeMulawBase64(applyPcmGain(pcm8k, TWILIO_OUTPUT_GAIN));
   }
 
   close() {
@@ -1026,6 +1069,20 @@ const encodeMulawBase64 = (samples) => {
   }
 
   return buffer.toString('base64');
+};
+
+const applyPcmGain = (samples, gain = 1) => {
+  if (gain === 1) {
+    return samples;
+  }
+
+  const adjusted = new Int16Array(samples.length);
+
+  for (let index = 0; index < samples.length; index += 1) {
+    adjusted[index] = Math.max(-32768, Math.min(32767, Math.round(samples[index] * gain)));
+  }
+
+  return adjusted;
 };
 
 const concatInt16Arrays = (first, second) => {
