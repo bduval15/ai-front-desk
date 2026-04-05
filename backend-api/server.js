@@ -130,10 +130,53 @@ const buildFallbackSummary = (call) => {
     }
 };
 
+const COMMON_SPLIT_WORD_SUFFIX_PATTERN = '(?:ments?|tions?|sions?|ingly|edly|ally|ably|ibly|fully|ously|lessly|ability|ibility|ances?|ences?|ancy|ency|ships?|wards?|wise|hood|able|ible|ness|less|ship|ward|wise|hood|ment|tion|sion|ing|ers?|est|ful|ous|ive|ial|ual|ary|ory|ize|ise|ed|ly|al)';
+
 const normalizeWhitespace = (value = '') => value
     .replace(/\s+/g, ' ')
     .replace(/\s+([,.;!?])/g, '$1')
     .trim();
+
+const repairFragmentedTranscriptWords = (value = '') => {
+    let repaired = value;
+    const splitSuffixPattern = new RegExp(`\\b([A-Za-z]{2,12})\\s+(${COMMON_SPLIT_WORD_SUFFIX_PATTERN})\\b`, 'gi');
+    const splitTriplePattern = new RegExp(`\\b([A-Za-z]{1,6})\\s+([A-Za-z]{2,8})\\s+(${COMMON_SPLIT_WORD_SUFFIX_PATTERN})\\b`, 'gi');
+
+    for (let pass = 0; pass < 3; pass += 1) {
+        const next = repaired
+            .replace(/\b(?:[A-Za-z]\s+){2,}[A-Za-z]\b/g, (match) => match.replace(/\s+/g, ''))
+            .replace(/\b([A-Za-z]+)\s+'\s+(m|re|ve|ll|d|s)\b/gi, "$1'$2")
+            .replace(/\b([A-Za-z]+)\s+n\s*'\s*t\b/gi, "$1n't")
+            .replace(splitTriplePattern, '$1$2$3')
+            .replace(splitSuffixPattern, '$1$2')
+            .replace(/\b([Hh]ave)(a|an)\b/g, '$1 $2')
+            .replace(/\b([Tt]hank)(you)\b/g, '$1 $2');
+
+        if (next === repaired) {
+            break;
+        }
+
+        repaired = next;
+    }
+
+    return repaired;
+};
+
+const stripInternalOutcomeLabels = (value = '') => value
+    .replace(/\s*(?:Outcome|Call status|Status)\s*:\s*(confirmed|rejected|busy|voicemail|unresolved|completed|pending|no answer|canceled)\.?\s*/ig, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const cleanTranscriptMessage = (value = '', speaker = '') => {
+    let cleaned = normalizeWhitespace(value);
+    cleaned = repairFragmentedTranscriptWords(cleaned);
+
+    if (speaker === 'FrontDesk AI') {
+        cleaned = stripInternalOutcomeLabels(cleaned);
+    }
+
+    return cleaned;
+};
 
 const sentenceCase = (value = '') => {
     const normalized = normalizeWhitespace(value);
@@ -169,16 +212,23 @@ const parseTranscriptLines = (transcript = '') => transcript
         if (!match) {
             return {
                 speaker: 'Transcript',
-                message: sentenceCase(line)
+                message: sentenceCase(cleanTranscriptMessage(line))
             };
         }
 
+        const speaker = normalizeSpeakerLabel(match[1]);
+        const cleanedMessage = cleanTranscriptMessage(match[2], speaker);
+
         return {
-            speaker: normalizeSpeakerLabel(match[1]),
-            message: sentenceCase(match[2])
+            speaker,
+            message: sentenceCase(cleanedMessage)
         };
     })
     .filter((entry) => entry.message);
+
+const normalizeTranscriptEntryComparison = (value = '') => cleanTranscriptMessage(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9']/g, '');
 
 const isDuplicateTranscriptEntry = (previousEntry, nextEntry) => {
     if (!previousEntry || !nextEntry) {
@@ -187,9 +237,57 @@ const isDuplicateTranscriptEntry = (previousEntry, nextEntry) => {
 
     return (
         previousEntry.speaker === nextEntry.speaker &&
-        previousEntry.message.toLowerCase() === nextEntry.message.toLowerCase()
+        normalizeTranscriptEntryComparison(previousEntry.message) === normalizeTranscriptEntryComparison(nextEntry.message)
     );
 };
+
+const mergeTranscriptEntries = (entries = []) => entries.reduce((mergedEntries, entry) => {
+    const previousEntry = mergedEntries[mergedEntries.length - 1];
+
+    if (!previousEntry || previousEntry.speaker !== entry.speaker) {
+        mergedEntries.push({ ...entry });
+        return mergedEntries;
+    }
+
+    const previousNormalized = normalizeTranscriptEntryComparison(previousEntry.message);
+    const nextNormalized = normalizeTranscriptEntryComparison(entry.message);
+
+    if (!nextNormalized) {
+        return mergedEntries;
+    }
+
+    if (!previousNormalized) {
+        previousEntry.message = entry.message;
+        return mergedEntries;
+    }
+
+    if (previousNormalized === nextNormalized) {
+        if (entry.message.length > previousEntry.message.length) {
+            previousEntry.message = entry.message;
+        }
+        return mergedEntries;
+    }
+
+    if (nextNormalized.startsWith(previousNormalized)) {
+        previousEntry.message = entry.message;
+        return mergedEntries;
+    }
+
+    if (previousNormalized.startsWith(nextNormalized)) {
+        return mergedEntries;
+    }
+
+    const previousEndsMidSentence = !/[.!?]["']?$/.test(previousEntry.message);
+    const nextLooksLikeContinuation = /^[a-z0-9'"(]/.test(entry.message);
+
+    if (previousEndsMidSentence || nextLooksLikeContinuation) {
+        previousEntry.message = normalizeWhitespace(`${previousEntry.message} ${entry.message}`);
+        return mergedEntries;
+    }
+
+    mergedEntries.push({ ...entry });
+    return mergedEntries;
+}, []);
 
 const shouldDropTrailingTranscriptArtifact = (entries = []) => {
     if (entries.length < 2) {
@@ -215,8 +313,8 @@ const shouldDropTrailingTranscriptArtifact = (entries = []) => {
 const sanitizeFormattedTranscript = (transcript = '', call) => {
     const fallbackTranscript = transcript || call.rawTranscript || call.transcript || '';
     const entries = parseTranscriptLines(fallbackTranscript);
-
-    const dedupedEntries = entries.filter((entry, index) => !isDuplicateTranscriptEntry(entries[index - 1], entry));
+    const mergedEntries = mergeTranscriptEntries(entries);
+    const dedupedEntries = mergedEntries.filter((entry, index) => !isDuplicateTranscriptEntry(mergedEntries[index - 1], entry));
 
     if (shouldDropTrailingTranscriptArtifact(dedupedEntries)) {
         dedupedEntries.pop();
@@ -226,6 +324,24 @@ const sanitizeFormattedTranscript = (transcript = '', call) => {
         .map((entry) => `${entry.speaker}: ${entry.message}`)
         .join('\n')
         .trim();
+};
+
+const shouldFallbackToRawTranscript = (candidateTranscript = '', rawTranscript = '') => {
+    const candidateEntries = parseTranscriptLines(candidateTranscript);
+    const rawEntries = parseTranscriptLines(rawTranscript);
+
+    if (!candidateEntries.length || !rawEntries.length) {
+        return false;
+    }
+
+    if (rawEntries.length >= 4 && candidateEntries.length + 1 < rawEntries.length) {
+        return true;
+    }
+
+    const candidateLength = candidateTranscript.length;
+    const rawLength = rawTranscript.length;
+
+    return rawLength >= 120 && candidateLength < Math.round(rawLength * 0.7);
 };
 
 const sanitizeSummary = (summary = '', call) => {
@@ -238,18 +354,26 @@ const sanitizeSummary = (summary = '', call) => {
 
 const parseFormattedTranscriptPayload = (rawModelOutput, call) => {
     const parsed = extractFirstJsonObject(rawModelOutput);
+    const cleanedRawTranscript = sanitizeFormattedTranscript(call.rawTranscript, call);
 
     if (!parsed) {
         return {
-            formattedTranscript: sanitizeFormattedTranscript(call.rawTranscript, call),
+            formattedTranscript: cleanedRawTranscript,
             summary: sanitizeSummary(buildFallbackSummary(call), call),
             callStatus: normalizeCallStatus(call.callStatus),
             structuredData: {}
         };
     }
 
+    const candidateFormattedTranscript = sanitizeFormattedTranscript(
+        parsed.formattedTranscript?.trim() || call.rawTranscript,
+        call
+    );
+
     return {
-        formattedTranscript: sanitizeFormattedTranscript(parsed.formattedTranscript?.trim() || call.rawTranscript, call),
+        formattedTranscript: shouldFallbackToRawTranscript(candidateFormattedTranscript, cleanedRawTranscript)
+            ? cleanedRawTranscript
+            : candidateFormattedTranscript,
         summary: sanitizeSummary(parsed.summary?.trim() || buildFallbackSummary(call), call),
         callStatus: normalizeCallStatus(parsed.callStatus, call.callStatus),
         structuredData: parsed.structuredData && typeof parsed.structuredData === 'object'

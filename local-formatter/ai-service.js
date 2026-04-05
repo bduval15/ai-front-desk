@@ -45,8 +45,11 @@ Rules:
 - Keep the summary under 30 words.
 - Use null or {} when data is unavailable.
 - Do not invent details that are not present in the transcript.
+- Keep every meaningful turn in chronological order. Do not skip or merge distinct turns just to make the transcript shorter.
 - Remove filler words, repeated fragments, half-finished phrases, and obvious speech-to-text glitches.
-- Fix punctuation, capitalization, split words, and grammar when the intended meaning is clear.
+- Fix punctuation, capitalization, split words, letter-spaced words, and grammar when the intended meaning is clear.
+- Repair artifacts like "a p p" -> "app", "appoint ment" -> "appointment", and "Havea" -> "Have a" when the intent is obvious.
+- If one line is a fuller version of another partial line, keep the fuller version.
 - Keep the dialogue natural and concise.
 - Use only speaker labels "FrontDesk AI" and "Caller" in formattedTranscript.
 - Put each turn on its own line in the format "Speaker: message".

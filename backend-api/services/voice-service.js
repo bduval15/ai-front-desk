@@ -38,6 +38,7 @@ const TERMINAL_STATUSES = new Set([
 ]);
 
 const noop = () => undefined;
+const COMMON_SPLIT_WORD_SUFFIX_PATTERN = '(?:ments?|tions?|sions?|ingly|edly|ingly|ally|ably|ibly|fully|ously|lessly|ability|ibility|ances?|ences?|ancy|ency|ships?|wards?|wise|hood|able|ible|ness|less|ship|ward|wise|hood|ment|tion|sion|ing|ers?|est|ful|ous|ive|ial|ual|ary|ory|ize|ise|ed|ly|al)';
 
 const safeJsonParse = (value, fallback = null) => {
   try {
@@ -61,11 +62,18 @@ const appendEvent = (list = [], event) => {
 
 const repairFragmentedTranscriptWords = (value = '') => {
   let repaired = value;
+  const splitSuffixPattern = new RegExp(`\\b([A-Za-z]{2,12})\\s+(${COMMON_SPLIT_WORD_SUFFIX_PATTERN})\\b`, 'gi');
+  const splitTriplePattern = new RegExp(`\\b([A-Za-z]{1,6})\\s+([A-Za-z]{2,8})\\s+(${COMMON_SPLIT_WORD_SUFFIX_PATTERN})\\b`, 'gi');
 
-  for (let pass = 0; pass < 4; pass += 1) {
+  for (let pass = 0; pass < 3; pass += 1) {
     const next = repaired
-      .replace(/\b([A-Za-z]{1,4})\s+([A-Za-z])(?=[,.;!?]|\s|$)/g, '$1$2')
-      .replace(/\b([A-Za-z])\s+([A-Za-z]{1,4})\b/g, '$1$2');
+      .replace(/\b(?:[A-Za-z]\s+){2,}[A-Za-z]\b/g, (match) => match.replace(/\s+/g, ''))
+      .replace(/\b([A-Za-z]+)\s+'\s+(m|re|ve|ll|d|s)\b/gi, "$1'$2")
+      .replace(/\b([A-Za-z]+)\s+n\s*'\s*t\b/gi, "$1n't")
+      .replace(splitTriplePattern, '$1$2$3')
+      .replace(splitSuffixPattern, '$1$2')
+      .replace(/\b([Hh]ave)(a|an)\b/g, '$1 $2')
+      .replace(/\b([Tt]hank)(you)\b/g, '$1 $2');
 
     if (next === repaired) {
       break;
@@ -81,6 +89,40 @@ const stripInternalOutcomeLabels = (value = '') => value
   .replace(/\s*(?:Outcome|Call status|Status)\s*:\s*(confirmed|rejected|busy|voicemail|unresolved|completed|pending|no answer|canceled)\.?\s*/ig, ' ')
   .replace(/\s+/g, ' ')
   .trim();
+
+const hasLetterSpacedWordArtifacts = (value = '') => /\b(?:[A-Za-z]\s+){2,}[A-Za-z]\b/.test(value);
+const hasTerminalSentencePunctuation = (value = '') => /[.!?]["']?$/.test(value.trim());
+
+const scoreTranscriptCandidate = (value = '') => {
+  const normalized = value.trim();
+
+  if (!normalized) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  const words = normalized.split(/\s+/).length;
+  let score = normalized.length + (words * 3);
+
+  if (hasTerminalSentencePunctuation(normalized)) {
+    score += 15;
+  }
+
+  if (hasLetterSpacedWordArtifacts(normalized)) {
+    score -= 25;
+  }
+
+  if (/\b(?:Outcome|Call status|Status)\s*:/i.test(normalized)) {
+    score -= 40;
+  }
+
+  return score;
+};
+
+const pickBetterTranscriptCandidate = (current = '', candidate = '') => (
+  scoreTranscriptCandidate(candidate) >= scoreTranscriptCandidate(current)
+    ? candidate
+    : current
+);
 
 const normalizeTranscriptText = (value = '', speaker = '') => {
   let normalized = value.replace(/\s+/g, ' ').trim();
@@ -954,10 +996,7 @@ class GeminiLiveBridge {
 
       if (part.text) {
         const candidateTranscript = normalizeTranscriptText(part.text, 'FrontDesk AI');
-
-        if (candidateTranscript.length > bestAssistantTranscript.length + 8) {
-          bestAssistantTranscript = candidateTranscript;
-        }
+        bestAssistantTranscript = pickBetterTranscriptCandidate(bestAssistantTranscript, candidateTranscript);
       }
     }
 
