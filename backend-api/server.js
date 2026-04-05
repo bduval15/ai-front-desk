@@ -8,10 +8,14 @@ import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import { createServer } from 'http';
 
-import { generateMistralResponse } from './ai-service.js';
 import User from './models/User.js';
 import Call from './models/Call.js';
 import { CALL_LIMIT, getUsageWarning, protect } from './middleware/auth.js';
+import {
+    generateAiPreview,
+    generateTranscriptFormatting,
+    getTranscriptFormatterMode
+} from './services/transcript-formatter-client.js';
 import {
     buildCallTwiml,
     handleCallStatusUpdate,
@@ -282,7 +286,7 @@ const queueTranscriptFormatting = (callId) => {
                 return;
             }
 
-            const modelOutput = await generateMistralResponse(call.rawTranscript, { isFormattingMode: true });
+            const modelOutput = await generateTranscriptFormatting(call.rawTranscript);
             const formatted = parseFormattedTranscriptPayload(modelOutput, call);
 
             call.formattedTranscript = formatted.formattedTranscript;
@@ -344,6 +348,7 @@ app.get('/api/health', (req, res) => {
     res.json({
         ok: true,
         voiceProvider: 'gemini',
+        transcriptFormatterMode: getTranscriptFormatterMode(),
         publicBaseUrlConfigured: Boolean(resolvePublicBaseUrl(req)),
         allowedOrigins: Array.from(configuredOrigins)
     });
@@ -353,7 +358,7 @@ app.post('/api/ai/test', async (req, res) => {
     const { prompt } = req.body;
 
     try {
-        const aiOutput = await generateMistralResponse(prompt, true);
+        const aiOutput = await generateAiPreview(prompt, true);
         res.json({ output: aiOutput });
     } catch (error) {
         res.status(500).json({ error: "Mistral failed to respond." });
@@ -650,8 +655,8 @@ app.get('/api/calls/my-calls', protect, async (req, res) => {
     res.json(calls);
 });
 
-const PORT = 5000;
+const PORT = Number(process.env.PORT || 5000);
 const server = createServer(app);
 registerVoiceSocketServer({ server, onCallEnded });
 
-server.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+server.listen(PORT, '0.0.0.0', () => console.log(`Server running on http://0.0.0.0:${PORT}`));

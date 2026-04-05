@@ -1,19 +1,25 @@
 # Dependency directories
 node_modules/
 backend/node_modules/
+backend-api/node_modules/
+local-formatter/node_modules/
 frontend/node_modules/
 
 # Environment variables (CRITICAL for security)
 .env
 backend/.env
+backend-api/.env
+local-formatter/.env
 frontend/.env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+.env.local-formatter
 
 #Ai Model Files
 backend/models-storage/*.gguf
+local-formatter/models-storage/*.gguf
 
 # Build outputs
 dist/
